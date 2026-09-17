@@ -98,7 +98,11 @@ export const parseOpml = (xml: string): ImportFeed[] => {
   return [...feeds.values()];
 };
 
-export const importOpml = async (env: Env, xml: string, now = Date.now()): Promise<OpmlImportResult> => {
+export const importOpml = async (
+  env: Env,
+  xml: string,
+  now = Date.now(),
+): Promise<OpmlImportResult> => {
   const feeds = parseOpml(xml);
   const folderNames = new Set<string>();
   let enqueued = 0;
