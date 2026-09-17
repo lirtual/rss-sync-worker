@@ -102,7 +102,26 @@ export const cleanupRetainedEntries = async (
 ): Promise<number> => {
   const boundedLimit = Math.max(1, Math.min(limit, RETENTION_BATCH_LIMIT));
   const cutoff = Math.max(0, now - RETENTION_AGE_MS);
-  const result = await db
+  const candidate = await db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM (
+         SELECT e.id
+         FROM entries e
+         JOIN entry_states es ON es.entry_id = e.id
+         WHERE es.is_read = 1
+           AND es.is_starred = 0
+           AND e.ingested_at < ?
+         ORDER BY e.ingested_at, e.id
+         LIMIT ?
+       )`,
+    )
+    .bind(cutoff, boundedLimit)
+    .first<{ count: number }>();
+  const count = candidate?.count ?? 0;
+  if (count === 0) return 0;
+
+  await db
     .prepare(
       `DELETE FROM entries
        WHERE id IN (
@@ -118,7 +137,7 @@ export const cleanupRetainedEntries = async (
     )
     .bind(cutoff, boundedLimit)
     .run();
-  return result.meta.changes ?? 0;
+  return count;
 };
 
 interface ServiceStateRow {
