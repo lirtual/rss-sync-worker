@@ -1,6 +1,13 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import {
+  configuredDispatchBudget,
+  getOperationalStatus,
+  isActiveFeed,
+  listFeedDiagnostics,
+} from "./ops-store";
 import { exportOpml, importOpml } from "./opml";
+import { enqueueFeedRefresh } from "./refresh";
 
 const MAX_OPML_BYTES = 1024 * 1024;
 const noStoreHeaders = { "cache-control": "no-store" };
@@ -36,11 +43,57 @@ const requireAdmin: MiddlewareHandler<AdminBindings> = async (context, next) => 
   await next();
 };
 
+const parseNonNegativeInt = (value: string | undefined, fallback: number): number | null => {
+  if (value === undefined || value === "") return fallback;
+  if (!/^\d+$/u.test(value)) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+};
+
 export const adminApp = new Hono<AdminBindings>();
 
 adminApp.use("/admin/*", requireAdmin);
 
-adminApp.get("/admin/status", (context) => context.json({ status: "ok" }, 200, noStoreHeaders));
+adminApp.get("/admin/status", async (context) => {
+  const now = Date.now();
+  const status = await getOperationalStatus(
+    context.env.DB,
+    now,
+    configuredDispatchBudget(context.env),
+  );
+  return context.json({ status: "ok", ...status }, 200, noStoreHeaders);
+});
+
+adminApp.get("/admin/feeds", async (context) => {
+  const after = parseNonNegativeInt(context.req.query("after"), 0);
+  const limit = parseNonNegativeInt(context.req.query("limit"), 50);
+  if (after === null || limit === null || limit < 1 || limit > 100) {
+    return context.json({ error: "BadPagination" }, 400, noStoreHeaders);
+  }
+
+  const result = await listFeedDiagnostics(context.env.DB, after, limit);
+  return context.json(result, 200, noStoreHeaders);
+});
+
+adminApp.post("/admin/feeds/:id/refresh", async (context) => {
+  const rawId = context.req.param("id");
+  if (!/^\d+$/u.test(rawId)) {
+    return context.json({ error: "BadFeedId" }, 400, noStoreHeaders);
+  }
+  const feedId = Number.parseInt(rawId, 10);
+  if (!Number.isSafeInteger(feedId) || feedId < 1) {
+    return context.json({ error: "BadFeedId" }, 400, noStoreHeaders);
+  }
+  if (!(await isActiveFeed(context.env.DB, feedId))) {
+    return context.json({ error: "UnknownActiveFeed" }, 404, noStoreHeaders);
+  }
+
+  const outcome = await enqueueFeedRefresh(context.env, feedId);
+  if (outcome === "budget-exhausted") {
+    return context.json({ status: outcome }, 429, noStoreHeaders);
+  }
+  return context.json({ status: outcome }, 202, noStoreHeaders);
+});
 
 adminApp.post("/admin/opml/import", async (context) => {
   const contentLength = context.req.header("content-length");
@@ -57,8 +110,8 @@ adminApp.post("/admin/opml/import", async (context) => {
     const result = await importOpml(context.env, xml);
     return context.json(result, 200, noStoreHeaders);
   } catch (error) {
-    console.warn("OPML import rejected", {
-      error: error instanceof Error ? error.name : "unknown",
+    console.warn("opml_import_rejected", {
+      errorClass: error instanceof Error ? error.name : "unknown",
     });
     return context.json({ error: "InvalidOpml" }, 400, noStoreHeaders);
   }
