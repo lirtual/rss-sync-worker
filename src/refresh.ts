@@ -8,6 +8,7 @@ import {
 } from "./store";
 
 const DEFAULT_CRON_BATCH = 20;
+type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export const enqueueFeedRefresh = async (
   env: Env,
@@ -47,12 +48,13 @@ export const processRefreshMessage = async (
   env: Env,
   message: RefreshMessage,
   now = Date.now(),
+  fetcher: Fetcher = fetch,
 ): Promise<"processed" | "stale"> => {
   const feed = await loadDispatchedFeed(env.DB, message);
   if (feed === null) return "stale";
 
   try {
-    const response = await fetch(feed.canonicalFeedUrl, {
+    const response = await fetcher(feed.canonicalFeedUrl, {
       headers: {
         Accept: "application/atom+xml, application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
         "User-Agent": "rss-sync-worker/0.1",
