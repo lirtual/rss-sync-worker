@@ -1,5 +1,5 @@
-import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
+import { Hono } from "hono";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { ensureSubscription, listSubscriptions } from "./store";
 
@@ -64,9 +64,7 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
 const readerForm = async (request: Request): Promise<URLSearchParams> =>
   new URLSearchParams(await request.text());
 
-app.get("/health", (context) =>
-  context.json({ status: "ok", service: "rss-sync-worker" }),
-);
+app.get("/health", (context) => context.json({ status: "ok", service: "rss-sync-worker" }));
 
 app.use("/admin/*", requireAdmin);
 app.get("/admin/status", (context) => context.json({ status: "ok" }, 200, jsonHeaders));
@@ -115,7 +113,11 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "subscription failed";
     const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
-    return context.json({ error: status === 400 ? "BadRequest" : "ServiceUnavailable" }, status, jsonHeaders);
+    return context.json(
+      { error: status === 400 ? "BadRequest" : "ServiceUnavailable" },
+      status,
+      jsonHeaders,
+    );
   }
 });
 
