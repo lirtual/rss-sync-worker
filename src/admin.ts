@@ -40,9 +40,7 @@ export const adminApp = new Hono<AdminBindings>();
 
 adminApp.use("/admin/*", requireAdmin);
 
-adminApp.get("/admin/status", (context) =>
-  context.json({ status: "ok" }, 200, noStoreHeaders),
-);
+adminApp.get("/admin/status", (context) => context.json({ status: "ok" }, 200, noStoreHeaders));
 
 adminApp.post("/admin/opml/import", async (context) => {
   const contentLength = context.req.header("content-length");
