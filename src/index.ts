@@ -1,22 +1,20 @@
 import { Hono } from "hono";
 import type { MiddlewareHandler } from "hono";
+import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
+import { ensureSubscription, listSubscriptions } from "./store";
 
 type AppBindings = {
   Bindings: Env;
 };
 
 const app = new Hono<AppBindings>();
-
 const readerRoot = "/api/reader/reader/api/0";
 
 const textHeaders = {
   "cache-control": "no-store",
   "content-type": "text/plain; charset=UTF-8",
 };
-
-const jsonHeaders = {
-  "cache-control": "no-store",
-};
+const jsonHeaders = { "cache-control": "no-store" };
 
 const textResponse = (body: string, status = 200): Response =>
   new Response(body, { status, headers: textHeaders });
@@ -44,9 +42,7 @@ const readerCredential = (authorization: string | undefined): string | null => {
 
 const requireReader: MiddlewareHandler<AppBindings> = async (context, next) => {
   const credential = readerCredential(context.req.header("Authorization"));
-  if (credential === null) {
-    return textResponse("Error=AuthRequired\n", 401);
-  }
+  if (credential === null) return textResponse("Error=AuthRequired\n", 401);
   if (!(await safeEqual(credential, context.env.READER_TOKEN))) {
     return textResponse("Error=InvalidAuthToken\n", 403);
   }
@@ -59,48 +55,39 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   if (authorization === undefined || !authorization.startsWith(prefix)) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
-
-  const token = authorization.slice(prefix.length);
-  if (!(await safeEqual(token, context.env.ADMIN_TOKEN))) {
+  if (!(await safeEqual(authorization.slice(prefix.length), context.env.ADMIN_TOKEN))) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
-
   await next();
 };
+
+const readerForm = async (request: Request): Promise<URLSearchParams> =>
+  new URLSearchParams(await request.text());
 
 app.get("/health", (context) =>
   context.json({ status: "ok", service: "rss-sync-worker" }),
 );
 
 app.use("/admin/*", requireAdmin);
-app.get("/admin/status", (context) =>
-  context.json({ status: "ok" }, 200, jsonHeaders),
-);
+app.get("/admin/status", (context) => context.json({ status: "ok" }, 200, jsonHeaders));
 
 app.post("/api/reader/accounts/ClientLogin", async (context) => {
-  const body = await context.req.text();
-  const form = new URLSearchParams(body);
+  const form = await readerForm(context.req.raw);
   const username = form.get("Email") ?? "";
   const password = form.get("Passwd") ?? "";
-
   const [usernameMatches, passwordMatches] = await Promise.all([
     safeEqual(username, context.env.READER_USERNAME),
     safeEqual(password, context.env.READER_TOKEN),
   ]);
 
-  if (!usernameMatches || !passwordMatches) {
-    return textResponse("Error=BadAuthentication\n", 403);
-  }
-
+  if (!usernameMatches || !passwordMatches) return textResponse("Error=BadAuthentication\n", 403);
   const credential = context.env.READER_TOKEN;
   return textResponse(`SID=${credential}\nLSID=${credential}\nAuth=${credential}\n`);
 });
 
 app.use(`${readerRoot}/*`, requireReader);
 
-app.get(`${readerRoot}/token`, (context) =>
-  textResponse(context.env.READER_TOKEN),
-);
+app.get(`${readerRoot}/token`, (context) => textResponse(context.env.READER_TOKEN));
 
 app.get(`${readerRoot}/user-info`, (context) =>
   context.json(
@@ -115,4 +102,62 @@ app.get(`${readerRoot}/user-info`, (context) =>
   ),
 );
 
-export default app;
+app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
+  try {
+    const form = await readerForm(context.req.raw);
+    const requestedUrl = form.get("quickadd") ?? "";
+    if (requestedUrl.trim() === "") return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+
+    const now = Date.now();
+    const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
+    await enqueueFeedRefresh(context.env, feedId, now);
+    return context.json({ streamId: `feed/${feedId}` }, 200, jsonHeaders);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "subscription failed";
+    const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
+    return context.json({ error: status === 400 ? "BadRequest" : "ServiceUnavailable" }, status, jsonHeaders);
+  }
+});
+
+app.get(`${readerRoot}/subscription/list`, async (context) => {
+  const subscriptions = await listSubscriptions(context.env.DB);
+  return context.json(
+    {
+      subscriptions: subscriptions.map((subscription) => ({
+        id: `feed/${subscription.feedId}`,
+        url: subscription.feedUrl,
+        htmlUrl: subscription.siteUrl ?? "",
+        title: subscription.title,
+        categories: [],
+        iconUrl: "",
+      })),
+    },
+    200,
+    jsonHeaders,
+  );
+});
+
+const worker = {
+  fetch(request, env, ctx) {
+    return app.fetch(request, env, ctx);
+  },
+  async scheduled(_controller, env) {
+    await dispatchDueFeeds(env);
+  },
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      try {
+        await processRefreshMessage(env, message.body);
+        message.ack();
+      } catch (error) {
+        console.error("feed refresh failed", {
+          feedId: message.body.feedId,
+          error: error instanceof Error ? error.name : "unknown",
+        });
+        message.retry({ delaySeconds: 60 });
+      }
+    }
+  },
+} satisfies ExportedHandler<Env, RefreshMessage>;
+
+export default worker;
