@@ -15,6 +15,7 @@ export default defineConfig(async () => {
             READER_TOKEN: "test-reader-token",
             ADMIN_TOKEN: "test-admin-token",
             DAILY_DISPATCH_BUDGET: "1600",
+            REEDER_TRACE: "0",
             TEST_MIGRATIONS: migrations,
           },
         },
