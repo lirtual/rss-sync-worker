@@ -7,13 +7,14 @@ const fetchWorker = (path: string, init?: RequestInit) =>
 describe("worker foundation", () => {
   it("serves a public health endpoint without secrets", async () => {
     const response = await fetchWorker("/health");
+    const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
+    expect(body).toEqual({
       status: "ok",
       service: "rss-sync-worker",
     });
-    expect(JSON.stringify(await response.clone().json())).not.toContain("token");
+    expect(JSON.stringify(body)).not.toContain("token");
   });
 
   it("rejects invalid ClientLogin credentials", async () => {
