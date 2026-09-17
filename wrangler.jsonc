@@ -3,6 +3,9 @@
   "name": "rss-sync-worker",
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-17",
+  "vars": {
+    "DAILY_DISPATCH_BUDGET": "1600"
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -29,6 +32,6 @@
     ]
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["*/5 * * * *", "17 3 * * *"]
   }
 }
