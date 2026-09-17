@@ -56,7 +56,8 @@ export const processRefreshMessage = async (
   try {
     const response = await fetcher(feed.canonicalFeedUrl, {
       headers: {
-        Accept: "application/atom+xml, application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+        Accept:
+          "application/atom+xml, application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
         "User-Agent": "rss-sync-worker/0.1",
       },
     });
