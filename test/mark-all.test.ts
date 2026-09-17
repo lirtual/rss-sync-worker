@@ -76,10 +76,7 @@ const markAll = async (stream: string, cutoffMs?: number): Promise<Response> => 
   );
 };
 
-const unread = async (
-  where = "1 = 1",
-  bindings: Array<string | number> = [],
-): Promise<number> => {
+const unread = async (where = "1 = 1", bindings: Array<string | number> = []): Promise<number> => {
   const row = await env.DB.prepare(
     `SELECT COUNT(*) AS count
      FROM entries e
@@ -103,7 +100,7 @@ describe("mark-all-as-read", () => {
          source_updated_at, ingested_at, last_source_seen_at, content_status,
          created_at, updated_at
        ) VALUES (?, ?, 'late', 'Late', 'https://bulk-global.example/article/late',
-                 NULL, ?, NULL, ?, ?, 'empty', ?, ?)` ,
+                 NULL, ?, NULL, ?, ?, 'empty', ?, ?)`,
     )
       .bind(
         feedId,
