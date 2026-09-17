@@ -37,10 +37,7 @@ export const listSubscriptionFolders = async (
   return result.results;
 };
 
-export const findFolderByName = async (
-  db: D1Database,
-  name: string,
-): Promise<FolderView | null> =>
+export const findFolderByName = async (db: D1Database, name: string): Promise<FolderView | null> =>
   db
     .prepare("SELECT id, name FROM folders WHERE name = ? COLLATE NOCASE")
     .bind(normalizeFolderName(name))
@@ -152,7 +149,8 @@ export const updateSubscription = async (
       .run();
   }
   if (changes.title !== undefined) {
-    const title = changes.title === null || changes.title.trim() === "" ? null : changes.title.trim();
+    const title =
+      changes.title === null || changes.title.trim() === "" ? null : changes.title.trim();
     await db
       .prepare("UPDATE subscriptions SET custom_title = ?, updated_at = ? WHERE feed_id = ?")
       .bind(title, now, feedId)
