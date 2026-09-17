@@ -56,7 +56,9 @@ describe("subscription bootstrap", () => {
     );
     expect(list.status).toBe(200);
     const payload = (await list.json()) as { subscriptions: Array<{ url: string }> };
-    expect(payload.subscriptions.filter((entry) => entry.url === "https://example.net/feed.xml")).toHaveLength(1);
+    expect(
+      payload.subscriptions.filter((entry) => entry.url === "https://example.net/feed.xml"),
+    ).toHaveLength(1);
   });
 
   it("marks first successful history read and later entries unread", async () => {
@@ -110,13 +112,19 @@ describe("subscription bootstrap", () => {
       .first<{ total: number; unread: number }>();
     expect(state).toEqual({ total: 3, unread: 1 });
 
-    const updated = await env.DB.prepare("SELECT title FROM entries WHERE feed_id = ? AND source_id = 'one'")
+    const updated = await env.DB.prepare(
+      "SELECT title FROM entries WHERE feed_id = ? AND source_id = 'one'",
+    )
       .bind(feedId)
       .first<{ title: string }>();
     expect(updated?.title).toBe("One updated");
 
-    expect(await processRefreshMessage(env, secondMessage, now + 4, fakeFeed(rss("")))).toBe("stale");
-    const afterReplay = await env.DB.prepare("SELECT COUNT(*) AS total FROM entries WHERE feed_id = ?")
+    expect(await processRefreshMessage(env, secondMessage, now + 4, fakeFeed(rss("")))).toBe(
+      "stale",
+    );
+    const afterReplay = await env.DB.prepare(
+      "SELECT COUNT(*) AS total FROM entries WHERE feed_id = ?",
+    )
       .bind(feedId)
       .first<{ total: number }>();
     expect(afterReplay?.total).toBe(3);
