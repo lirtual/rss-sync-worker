@@ -9,6 +9,7 @@ import {
   renameFolder,
   updateSubscription,
 } from "./folder-store";
+import { markStreamRead, type MarkAllScope } from "./mark-all-store";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { mutateEntryStates } from "./state-store";
@@ -103,6 +104,23 @@ const parseLabelName = (value: string | null): string | null => {
 };
 
 const labelId = (name: string): string => `${labelPrefix}${name}`;
+
+const parseReaderCutoffMs = (raw: string | null, fallback: number): number | null => {
+  if (raw === null || raw === "") return fallback;
+  if (!/^\d+$/u.test(raw)) return null;
+  const numeric = Number(raw);
+  if (!Number.isSafeInteger(numeric) || numeric < 0) return null;
+  const milliseconds = numeric >= 100_000_000_000_000 ? Math.floor(numeric / 1_000) : numeric;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : null;
+};
+
+const parseMarkAllScope = (stream: string): MarkAllScope | null => {
+  if (stream === readingListStream) return { kind: "reading-list" };
+  const feedId = parseFeedStream(stream);
+  if (feedId !== null) return { kind: "feed", feedId };
+  const folderName = parseLabelName(stream);
+  return folderName === null ? null : { kind: "folder", folderName };
+};
 
 app.get("/health", (context) => context.json({ status: "ok", service: "rss-sync-worker" }));
 
@@ -249,8 +267,9 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
   const url = new URL(context.req.url);
   const stream = url.searchParams.get("s") ?? readingListStream;
   const feedId = parseFeedStream(stream);
+  const folderName = parseLabelName(stream);
   const starredOnly = stream === starredStream;
-  if (stream !== readingListStream && !starredOnly && feedId === null) {
+  if (stream !== readingListStream && !starredOnly && feedId === null && folderName === null) {
     return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
   }
 
@@ -267,6 +286,7 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
     context.env.DB,
     {
       feedId,
+      folderName,
       unreadOnly: url.searchParams.get("xt") === readState,
       starredOnly,
     },
@@ -331,6 +351,19 @@ app.post(`${readerRoot}/edit-tag`, async (context) => {
   if (remove.has(starredStream)) mutation.isStarred = false;
 
   await mutateEntryStates(context.env.DB, ids, mutation, Date.now());
+  return textResponse("OK\n");
+});
+
+app.post(`${readerRoot}/mark-all-as-read`, async (context) => {
+  const form = await readerForm(context.req.raw);
+  const scope = parseMarkAllScope(form.get("s") ?? readingListStream);
+  if (scope === null) return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
+
+  const changedAt = Date.now();
+  const cutoffMs = parseReaderCutoffMs(form.get("ts"), changedAt);
+  if (cutoffMs === null) return context.json({ error: "BadTimestamp" }, 400, jsonHeaders);
+
+  await markStreamRead(context.env.DB, scope, cutoffMs, changedAt);
   return textResponse("OK\n");
 });
 
