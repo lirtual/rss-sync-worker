@@ -234,8 +234,7 @@ export const getOperationalStatus = async (
     lastQueueSuccessAt: state.lastQueueSuccessAt,
     lastQueueErrorAt: state.lastQueueErrorAt,
     lastQueueErrorClass: state.lastQueueErrorClass,
-    oldestOverdueAgeMs:
-      counts.oldestDueAt === null ? null : Math.max(0, now - counts.oldestDueAt),
+    oldestOverdueAgeMs: counts.oldestDueAt === null ? null : Math.max(0, now - counts.oldestDueAt),
   };
 };
 
