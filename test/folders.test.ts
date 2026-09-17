@@ -113,7 +113,7 @@ describe("folders and subscription lifecycle", () => {
   });
 
   it("preserves history and state across unsubscribe and resubscribe", async () => {
-    const now = 1_802_000_000_000;
+    const now = Date.now() - 10_000;
     const feedId = await ensureSubscription(env.DB, "https://lifecycle.example/feed.xml", now);
     const message = await claimDispatch(env.DB, feedId, now);
     if (message === null) throw new Error("expected dispatch");
