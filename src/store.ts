@@ -4,6 +4,9 @@ const MAX_ENTRY_CONTENT_BYTES = 512 * 1024;
 const DISPATCH_DEADLINE_MS = 15 * 60 * 1000;
 const CHANGED_REFRESH_MS = 30 * 60 * 1000;
 const QUIET_REFRESH_MS = 60 * 60 * 1000;
+const FAILURE_BASE_MS = 15 * 60 * 1000;
+const FAILURE_MAX_MS = 24 * 60 * 60 * 1000;
+const REDIRECT_CONFIRMATIONS = 3;
 
 export interface SubscriptionView {
   feedId: number;
@@ -18,6 +21,14 @@ export interface DispatchedFeed {
   etag: string | null;
   lastModified: string | null;
   bootstrappedAt: number | null;
+  consecutiveFailures: number;
+}
+
+export interface RefreshResponseMeta {
+  etag: string | null;
+  lastModified: string | null;
+  finalUrl: string;
+  permanentRedirectTarget: string | null;
 }
 
 export interface RefreshPersistResult {
@@ -68,16 +79,28 @@ const identityKey = async (entry: ParsedEntry, feedUrl: string): Promise<string>
   return sha256Hex(`fallback:${fallback}`);
 };
 
+const findFeedByUrl = async (db: D1Database, feedUrl: string): Promise<{ id: number } | null> =>
+  db
+    .prepare(
+      `SELECT id
+       FROM feeds
+       WHERE canonical_feed_url = ?
+       UNION ALL
+       SELECT feed_id AS id
+       FROM feed_url_aliases
+       WHERE url = ?
+       LIMIT 1`,
+    )
+    .bind(feedUrl, feedUrl)
+    .first<{ id: number }>();
+
 export const ensureSubscription = async (
   db: D1Database,
   rawUrl: string,
   now: number,
 ): Promise<number> => {
   const feedUrl = canonicalizeFeedUrl(rawUrl);
-  let row = await db
-    .prepare("SELECT id FROM feeds WHERE canonical_feed_url = ?")
-    .bind(feedUrl)
-    .first<{ id: number }>();
+  let row = await findFeedByUrl(db, feedUrl);
 
   if (row === null) {
     await db
@@ -89,10 +112,7 @@ export const ensureSubscription = async (
       )
       .bind(feedUrl, feedUrl, now, now, now)
       .run();
-    row = await db
-      .prepare("SELECT id FROM feeds WHERE canonical_feed_url = ?")
-      .bind(feedUrl)
-      .first<{ id: number }>();
+    row = await findFeedByUrl(db, feedUrl);
   }
 
   if (row === null) throw new Error("failed to create feed");
@@ -168,13 +188,14 @@ export const listDueFeedIds = async (
 export const loadDispatchedFeed = async (
   db: D1Database,
   message: RefreshMessage,
-): Promise<DispatchedFeed | null> => {
-  return db
+): Promise<DispatchedFeed | null> =>
+  db
     .prepare(
       `SELECT f.id,
               f.canonical_feed_url AS canonicalFeedUrl,
               f.etag,
               f.last_modified AS lastModified,
+              f.consecutive_failures AS consecutiveFailures,
               s.bootstrapped_at AS bootstrappedAt
        FROM feeds f
        JOIN subscriptions s ON s.feed_id = f.id AND s.active = 1
@@ -182,7 +203,6 @@ export const loadDispatchedFeed = async (
     )
     .bind(message.feedId, message.dispatchToken)
     .first<DispatchedFeed>();
-};
 
 const upsertEntry = async (
   db: D1Database,
@@ -291,19 +311,128 @@ const upsertEntry = async (
   return (inserted.meta.changes ?? 0) === 1;
 };
 
+const recordRedirectEvidence = async (
+  db: D1Database,
+  feed: DispatchedFeed,
+  message: RefreshMessage,
+  target: string | null,
+  now: number,
+): Promise<void> => {
+  if (target === null || target === feed.canonicalFeedUrl) {
+    await db
+      .prepare(
+        `UPDATE feeds
+         SET redirect_candidate_url = NULL, redirect_candidate_successes = 0
+         WHERE id = ? AND dispatch_token = ?`,
+      )
+      .bind(feed.id, message.dispatchToken)
+      .run();
+    return;
+  }
+
+  await db
+    .prepare(
+      `UPDATE feeds
+       SET redirect_candidate_successes = CASE
+             WHEN redirect_candidate_url = ? THEN redirect_candidate_successes + 1
+             ELSE 1
+           END,
+           redirect_candidate_url = ?,
+           updated_at = ?
+       WHERE id = ? AND dispatch_token = ?`,
+    )
+    .bind(target, target, now, feed.id, message.dispatchToken)
+    .run();
+
+  const candidate = await db
+    .prepare(
+      `SELECT redirect_candidate_url AS url, redirect_candidate_successes AS successes
+       FROM feeds
+       WHERE id = ? AND dispatch_token = ?`,
+    )
+    .bind(feed.id, message.dispatchToken)
+    .first<{ url: string | null; successes: number }>();
+  if (candidate?.url !== target || candidate.successes < REDIRECT_CONFIRMATIONS) return;
+
+  const conflict = await db
+    .prepare(
+      `SELECT 1 AS conflict
+       FROM feeds
+       WHERE canonical_feed_url = ? AND id <> ?
+       UNION ALL
+       SELECT 1 AS conflict
+       FROM feed_url_aliases
+       WHERE url = ? AND feed_id <> ?
+       LIMIT 1`,
+    )
+    .bind(target, feed.id, target, feed.id)
+    .first<{ conflict: number }>();
+  if (conflict !== null) return;
+
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO feed_url_aliases (url, feed_id, created_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(url) DO NOTHING`,
+      )
+      .bind(feed.canonicalFeedUrl, feed.id, now),
+    db
+      .prepare(
+        `UPDATE feeds
+         SET canonical_feed_url = ?, redirect_candidate_url = NULL,
+             redirect_candidate_successes = 0, updated_at = ?
+         WHERE id = ? AND dispatch_token = ? AND redirect_candidate_url = ?`,
+      )
+      .bind(target, now, feed.id, message.dispatchToken, target),
+  ]);
+};
+
+export const persistNotModifiedRefresh = async (
+  db: D1Database,
+  feed: DispatchedFeed,
+  message: RefreshMessage,
+  responseMeta: RefreshResponseMeta,
+  now: number,
+): Promise<void> => {
+  await recordRedirectEvidence(db, feed, message, responseMeta.permanentRedirectTarget, now);
+  await db
+    .prepare(
+      `UPDATE feeds
+       SET etag = ?, last_modified = ?, last_attempt_at = ?, last_success_at = ?,
+           next_fetch_at = ?, consecutive_failures = 0,
+           last_error_class = NULL, last_error_message = NULL,
+           dispatch_token = NULL, dispatch_deadline_at = NULL, updated_at = ?
+       WHERE id = ? AND dispatch_token = ?`,
+    )
+    .bind(
+      responseMeta.etag,
+      responseMeta.lastModified,
+      now,
+      now,
+      now + QUIET_REFRESH_MS,
+      now,
+      feed.id,
+      message.dispatchToken,
+    )
+    .run();
+};
+
 export const persistSuccessfulRefresh = async (
   db: D1Database,
   feed: DispatchedFeed,
   message: RefreshMessage,
   parsed: ParsedFeed,
-  responseMeta: { etag: string | null; lastModified: string | null },
+  responseMeta: RefreshResponseMeta,
   now: number,
 ): Promise<RefreshPersistResult> => {
+  await recordRedirectEvidence(db, feed, message, responseMeta.permanentRedirectTarget, now);
+
   let insertedEntries = 0;
   const bootstrapRead = feed.bootstrappedAt === null;
-
+  const fetchedFeed = { ...feed, canonicalFeedUrl: responseMeta.finalUrl };
   for (const entry of parsed.entries) {
-    if (await upsertEntry(db, feed, entry, bootstrapRead, now)) insertedEntries += 1;
+    if (await upsertEntry(db, fetchedFeed, entry, bootstrapRead, now)) insertedEntries += 1;
   }
 
   if (feed.bootstrappedAt === null) {
@@ -350,17 +479,21 @@ export const persistSuccessfulRefresh = async (
 
 export const recordRefreshFailure = async (
   db: D1Database,
+  feed: DispatchedFeed,
   message: RefreshMessage,
   now: number,
   error: unknown,
 ): Promise<void> => {
   const summary = error instanceof Error ? error.message.slice(0, 1024) : "unknown refresh failure";
+  const errorClass = error instanceof Error ? error.name.slice(0, 128) : "refresh";
+  const multiplier = 2 ** Math.min(feed.consecutiveFailures, 7);
+  const delay = Math.min(FAILURE_BASE_MS * multiplier, FAILURE_MAX_MS);
   await db
     .prepare(
       `UPDATE feeds
        SET last_attempt_at = ?,
            consecutive_failures = consecutive_failures + 1,
-           last_error_class = 'refresh',
+           last_error_class = ?,
            last_error_message = ?,
            next_fetch_at = ?,
            dispatch_token = NULL,
@@ -368,6 +501,6 @@ export const recordRefreshFailure = async (
            updated_at = ?
        WHERE id = ? AND dispatch_token = ?`,
     )
-    .bind(now, summary, now + 15 * 60 * 1000, now, message.feedId, message.dispatchToken)
+    .bind(now, errorClass, summary, now + delay, now, feed.id, message.dispatchToken)
     .run();
 };
