@@ -16,6 +16,7 @@ export interface ParsedFeed {
   entries: ParsedEntry[];
 }
 
+const MAX_PARSED_ENTRIES = 250;
 const parser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
@@ -135,6 +136,13 @@ const parseAtom = (root: Record<string, unknown>): ParsedFeed | null => {
   };
 };
 
+const bounded = (feed: ParsedFeed): ParsedFeed => {
+  if (feed.entries.length > MAX_PARSED_ENTRIES) {
+    throw new Error(`feed contains more than ${MAX_PARSED_ENTRIES} entries`);
+  }
+  return feed;
+};
+
 export const parseFeed = (xml: string): ParsedFeed => {
   if (/<!DOCTYPE|<!ENTITY/iu.test(xml)) {
     throw new Error("feed XML declarations with DTD/entities are not supported");
@@ -144,10 +152,10 @@ export const parseFeed = (xml: string): ParsedFeed => {
   if (root === null) throw new Error("feed document is not XML data");
 
   const rss = parseRss(root);
-  if (rss !== null) return rss;
+  if (rss !== null) return bounded(rss);
 
   const atom = parseAtom(root);
-  if (atom !== null) return atom;
+  if (atom !== null) return bounded(atom);
 
   throw new Error("unsupported feed format: expected RSS 2.0 or Atom 1.0");
 };
