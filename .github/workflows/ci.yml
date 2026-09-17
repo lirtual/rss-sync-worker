@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - issue-1-foundation-auth
+      - feat/rss-sync-worker-v0.1
   pull_request:
 
 jobs:
@@ -15,5 +15,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
+      - run: npm install --legacy-peer-deps --no-audit --no-fund
       - run: npm run check
