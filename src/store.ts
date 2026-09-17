@@ -501,6 +501,6 @@ export const recordRefreshFailure = async (
            updated_at = ?
        WHERE id = ? AND dispatch_token = ?`,
     )
-    .bind(errorClass, summary, now + delay, now, feed.id, message.dispatchToken)
+    .bind(now, errorClass, summary, now + delay, now, feed.id, message.dispatchToken)
     .run();
 };
