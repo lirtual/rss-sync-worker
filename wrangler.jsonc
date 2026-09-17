@@ -4,7 +4,8 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-17",
   "vars": {
-    "DAILY_DISPATCH_BUDGET": "1600"
+    "DAILY_DISPATCH_BUDGET": "1600",
+    "REEDER_TRACE": "0"
   },
   "d1_databases": [
     {
