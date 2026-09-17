@@ -1,5 +1,14 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import {
+  addFolderMembership,
+  deleteFolder,
+  listFolders,
+  listSubscriptionFolders,
+  removeFolderMembership,
+  renameFolder,
+  updateSubscription,
+} from "./folder-store";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { ensureSubscription, listSubscriptions } from "./store";
 
@@ -9,6 +18,7 @@ type AppBindings = {
 
 const app = new Hono<AppBindings>();
 const readerRoot = "/api/reader/reader/api/0";
+const labelPrefix = "user/-/label/";
 
 const textHeaders = {
   "cache-control": "no-store",
@@ -63,6 +73,22 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
 
 const readerForm = async (request: Request): Promise<URLSearchParams> =>
   new URLSearchParams(await request.text());
+
+const parseFeedId = (value: string | null): number | null => {
+  if (value === null) return null;
+  const match = /^feed\/(\d+)$/u.exec(value);
+  if (match === null) return null;
+  const parsed = Number.parseInt(match[1] ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const parseLabelName = (value: string | null): string | null => {
+  if (value === null || !value.startsWith(labelPrefix)) return null;
+  const name = value.slice(labelPrefix.length).trim();
+  return name === "" ? null : name;
+};
+
+const labelId = (name: string): string => `${labelPrefix}${name}`;
 
 app.get("/health", (context) => context.json({ status: "ok", service: "rss-sync-worker" }));
 
@@ -122,7 +148,17 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
 });
 
 app.get(`${readerRoot}/subscription/list`, async (context) => {
-  const subscriptions = await listSubscriptions(context.env.DB);
+  const [subscriptions, memberships] = await Promise.all([
+    listSubscriptions(context.env.DB),
+    listSubscriptionFolders(context.env.DB),
+  ]);
+  const categoriesByFeed = new Map<number, Array<{ id: string; label: string; type: string }>>();
+  for (const membership of memberships) {
+    const categories = categoriesByFeed.get(membership.feedId) ?? [];
+    categories.push({ id: labelId(membership.name), label: membership.name, type: "folder" });
+    categoriesByFeed.set(membership.feedId, categories);
+  }
+
   return context.json(
     {
       subscriptions: subscriptions.map((subscription) => ({
@@ -130,13 +166,69 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
         url: subscription.feedUrl,
         htmlUrl: subscription.siteUrl ?? "",
         title: subscription.title,
-        categories: [],
+        categories: categoriesByFeed.get(subscription.feedId) ?? [],
         iconUrl: "",
       })),
     },
     200,
     jsonHeaders,
   );
+});
+
+app.post(`${readerRoot}/subscription/edit`, async (context) => {
+  const form = await readerForm(context.req.raw);
+  const feedId = parseFeedId(form.get("s"));
+  if (feedId === null) return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
+
+  const action = form.get("ac") ?? "edit";
+  const now = Date.now();
+  const active = action === "subscribe" ? true : action === "unsubscribe" ? false : undefined;
+  if (action !== "edit" && active === undefined) {
+    return context.json({ error: "BadAction" }, 400, jsonHeaders);
+  }
+
+  const title = form.has("t") ? form.get("t") : undefined;
+  const exists = await updateSubscription(context.env.DB, feedId, { active, title }, now);
+  if (!exists) return context.json({ error: "UnknownSubscription" }, 404, jsonHeaders);
+
+  for (const value of form.getAll("a")) {
+    const name = parseLabelName(value);
+    if (name !== null) await addFolderMembership(context.env.DB, feedId, name, now);
+  }
+  for (const value of form.getAll("r")) {
+    const name = parseLabelName(value);
+    if (name !== null) await removeFolderMembership(context.env.DB, feedId, name);
+  }
+
+  return textResponse("OK");
+});
+
+app.get(`${readerRoot}/tag/list`, async (context) => {
+  const folders = await listFolders(context.env.DB);
+  return context.json(
+    { tags: folders.map((folder) => ({ id: labelId(folder.name) })) },
+    200,
+    jsonHeaders,
+  );
+});
+
+app.post(`${readerRoot}/rename-tag`, async (context) => {
+  const form = await readerForm(context.req.raw);
+  const source = parseLabelName(form.get("s"));
+  const destination = parseLabelName(form.get("dest"));
+  if (source === null || destination === null) {
+    return context.json({ error: "BadTag" }, 400, jsonHeaders);
+  }
+  await renameFolder(context.env.DB, source, destination, Date.now());
+  return textResponse("OK");
+});
+
+app.post(`${readerRoot}/disable-tag`, async (context) => {
+  const form = await readerForm(context.req.raw);
+  const name = parseLabelName(form.get("s"));
+  if (name === null) return context.json({ error: "BadTag" }, 400, jsonHeaders);
+  await deleteFolder(context.env.DB, name);
+  return textResponse("OK");
 });
 
 const worker = {
