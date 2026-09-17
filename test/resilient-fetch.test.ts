@@ -26,18 +26,19 @@ describe("safe feed retrieval", () => {
   });
 
   it("sends conditional headers and handles 304 without reading a body", async () => {
-    let seen: Headers | null = null;
+    const seen = new Headers();
     const result = await fetchFeedDocument(
       "https://conditional.example/feed.xml",
       { etag: '"v1"', lastModified: "Wed, 16 Sep 2026 12:00:00 GMT" },
       async (_input, init) => {
-        seen = new Headers(init?.headers);
+        const requestHeaders = new Headers(init?.headers);
+        for (const [name, value] of requestHeaders.entries()) seen.set(name, value);
         return new Response(null, { status: 304, headers: { etag: '"v1"' } });
       },
     );
     expect(result.status).toBe("not-modified");
-    expect(seen?.get("If-None-Match")).toBe('"v1"');
-    expect(seen?.get("If-Modified-Since")).toBe("Wed, 16 Sep 2026 12:00:00 GMT");
+    expect(seen.get("If-None-Match")).toBe('"v1"');
+    expect(seen.get("If-Modified-Since")).toBe("Wed, 16 Sep 2026 12:00:00 GMT");
   });
 
   it("rejects redirects into private targets", async () => {
