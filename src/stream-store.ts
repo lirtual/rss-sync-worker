@@ -54,10 +54,7 @@ export const listStreamItemIds = async (
   return { items: result.results.slice(0, limit), hasMore };
 };
 
-export const findReaderEntries = async (
-  db: D1Database,
-  ids: number[],
-): Promise<ReaderEntry[]> => {
+export const findReaderEntries = async (db: D1Database, ids: number[]): Promise<ReaderEntry[]> => {
   if (ids.length === 0) return [];
   const placeholders = ids.map(() => "?").join(", ");
   const result = await db
