@@ -98,6 +98,9 @@ describe("free-plan operations", () => {
     const now = Date.now();
     const first = await ensureSubscription(env.DB, "https://budget-a.example/feed.xml", now);
     const second = await ensureSubscription(env.DB, "https://budget-b.example/feed.xml", now);
+    await env.DB.prepare("UPDATE feeds SET next_fetch_at = ? WHERE id NOT IN (?, ?)")
+      .bind(now + 2 * 24 * 60 * 60 * 1_000, first, second)
+      .run();
     await env.DB.prepare(
       `UPDATE service_state
        SET budget_day = ?, dispatches_today = 1599, updated_at = ?
@@ -107,25 +110,20 @@ describe("free-plan operations", () => {
       .run();
 
     const summary = await dispatchDueFeeds(env, now, 20);
-    expect(summary.dispatched).toBe(1);
-    expect(summary.budgetExhausted).toBe(true);
+    expect(summary).toEqual({ due: 2, dispatched: 1, budgetExhausted: true });
 
-    const rows = await env.DB.prepare(
-      `SELECT id, dispatch_token AS token FROM feeds WHERE id IN (?, ?) ORDER BY id`,
-    )
-      .bind(first, second)
-      .all<{ id: number; token: string | null }>();
-    expect(rows.results.filter((row) => row.token !== null)).toHaveLength(1);
-
-    const nextDay = now + 24 * 60 * 60 * 1_000;
-    const undispatched = rows.results.find((row) => row.token === null);
-    if (undispatched === undefined) throw new Error("expected one deferred feed");
-    expect(await enqueueFeedRefresh(env, undispatched.id, nextDay)).toBe("enqueued");
-
-    const state = await env.DB.prepare(
+    const exhaustedState = await env.DB.prepare(
       "SELECT budget_day AS day, dispatches_today AS used FROM service_state WHERE id = 1",
     ).first<{ day: string; used: number }>();
-    expect(state).toEqual({ day: dayKey(nextDay), used: 1 });
+    expect(exhaustedState).toEqual({ day: dayKey(now), used: 1600 });
+
+    const nextDay = now + 24 * 60 * 60 * 1_000;
+    expect(await enqueueFeedRefresh(env, second, nextDay)).toBe("enqueued");
+
+    const resetState = await env.DB.prepare(
+      "SELECT budget_day AS day, dispatches_today AS used FROM service_state WHERE id = 1",
+    ).first<{ day: string; used: number }>();
+    expect(resetState).toEqual({ day: dayKey(nextDay), used: 1 });
   });
 
   it("exposes diagnostics and routes manual refresh through the Queue path", async () => {
@@ -133,7 +131,9 @@ describe("free-plan operations", () => {
     const feedId = await ensureSubscription(env.DB, "https://admin-ops.example/feed.xml", now);
 
     const feedsResponse = await exports.default.fetch(
-      new Request("https://rss-sync.test/admin/feeds?limit=1", { headers: adminHeaders }),
+      new Request(`https://rss-sync.test/admin/feeds?after=${feedId - 1}&limit=1`, {
+        headers: adminHeaders,
+      }),
     );
     expect(feedsResponse.status).toBe(200);
     const feeds = (await feedsResponse.json()) as {
