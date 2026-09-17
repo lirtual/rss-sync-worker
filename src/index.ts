@@ -1,7 +1,9 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { ensureSubscription, listSubscriptions } from "./store";
+import { findReaderEntries, listStreamItemIds } from "./stream-store";
 
 type AppBindings = {
   Bindings: Env;
@@ -9,6 +11,9 @@ type AppBindings = {
 
 const app = new Hono<AppBindings>();
 const readerRoot = "/api/reader/reader/api/0";
+const readingListStream = "user/-/state/com.google/reading-list";
+const starredStream = "user/-/state/com.google/starred";
+const readState = "user/-/state/com.google/read";
 
 const textHeaders = {
   "cache-control": "no-store",
@@ -63,6 +68,21 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
 
 const readerForm = async (request: Request): Promise<URLSearchParams> =>
   new URLSearchParams(await request.text());
+
+const parsePositiveInt = (value: string | null, fallback: number, max: number): number | null => {
+  if (value === null || value === "") return fallback;
+  if (!/^\d+$/u.test(value)) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) return null;
+  return parsed;
+};
+
+const parseFeedStream = (stream: string): number | null => {
+  const match = /^feed\/(\d+)$/u.exec(stream);
+  if (match === null) return null;
+  const id = Number.parseInt(match[1] ?? "", 10);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+};
 
 app.get("/health", (context) => context.json({ status: "ok", service: "rss-sync-worker" }));
 
@@ -133,6 +153,70 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
         categories: [],
         iconUrl: "",
       })),
+    },
+    200,
+    jsonHeaders,
+  );
+});
+
+app.get(`${readerRoot}/stream/items/ids`, async (context) => {
+  const url = new URL(context.req.url);
+  const stream = url.searchParams.get("s") ?? readingListStream;
+  const feedId = parseFeedStream(stream);
+  const starredOnly = stream === starredStream;
+  if (stream !== readingListStream && !starredOnly && feedId === null) {
+    return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
+  }
+
+  const limit = parsePositiveInt(url.searchParams.get("n"), 10_000, 10_000);
+  if (limit === null) return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+
+  const rawContinuation = url.searchParams.get("c");
+  const cursor = decodeContinuation(rawContinuation);
+  if (rawContinuation !== null && cursor === null) {
+    return context.json({ error: "BadContinuation" }, 400, jsonHeaders);
+  }
+
+  const page = await listStreamItemIds(
+    context.env.DB,
+    {
+      feedId,
+      unreadOnly: url.searchParams.get("xt") === readState,
+      starredOnly,
+    },
+    cursor,
+    limit,
+  );
+  const last = page.items.at(-1);
+  return context.json(
+    {
+      itemRefs: page.items.map((item) => ({ id: String(item.id) })),
+      ...(page.hasMore && last !== undefined
+        ? { continuation: encodeContinuation({ ingestedAt: last.ingestedAt, id: last.id }) }
+        : {}),
+    },
+    200,
+    jsonHeaders,
+  );
+});
+
+app.post(`${readerRoot}/stream/items/contents`, async (context) => {
+  const form = await readerForm(context.req.raw);
+  const rawIds = form.getAll("i");
+  if (rawIds.length > 100) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+
+  const ids: number[] = [];
+  for (const value of rawIds) {
+    const id = parseItemId(value);
+    if (id === null) return context.json({ error: "BadItemId" }, 400, jsonHeaders);
+    ids.push(id);
+  }
+
+  const entries = await findReaderEntries(context.env.DB, ids);
+  return context.json(
+    {
+      items: entries.map(googleEntry),
+      updated: Math.floor(Date.now() / 1_000),
     },
     200,
     jsonHeaders,
