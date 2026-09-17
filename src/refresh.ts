@@ -1,6 +1,13 @@
 import { fetchFeedDocument } from "./feed/fetch";
 import { parseFeed } from "./feed/parser";
 import {
+  configuredDispatchBudget,
+  recordCronRun,
+  releaseDispatchSlot,
+  reserveDispatchSlot,
+  rollDispatchBudgetDay,
+} from "./ops-store";
+import {
   claimDispatch,
   listDueFeedIds,
   loadDispatchedFeed,
@@ -11,47 +18,71 @@ import {
 
 const DEFAULT_CRON_BATCH = 20;
 type Fetcher = typeof fetch;
+export type EnqueueOutcome = "enqueued" | "already-dispatched" | "budget-exhausted";
 
 export const enqueueFeedRefresh = async (
   env: Env,
   feedId: number,
   now = Date.now(),
-): Promise<"enqueued" | "already-dispatched"> => {
+): Promise<EnqueueOutcome> => {
+  const budget = configuredDispatchBudget(env);
+  if (!(await reserveDispatchSlot(env.DB, now, budget))) return "budget-exhausted";
+
   const message = await claimDispatch(env.DB, feedId, now);
-  if (message === null) return "already-dispatched";
+  if (message === null) {
+    await releaseDispatchSlot(env.DB, now);
+    return "already-dispatched";
+  }
+
   try {
     await env.REFRESH_QUEUE.send(message);
   } catch (error) {
-    console.error("queue send failed after dispatch claim", {
+    console.error("queue_send_failed", {
       feedId,
-      error: error instanceof Error ? error.name : "unknown",
+      errorClass: error instanceof Error ? error.name : "unknown",
     });
     throw error;
   }
   return "enqueued";
 };
 
+export interface DispatchSummary {
+  due: number;
+  dispatched: number;
+  budgetExhausted: boolean;
+}
+
 export const dispatchDueFeeds = async (
   env: Env,
   now = Date.now(),
   limit = DEFAULT_CRON_BATCH,
-): Promise<number> => {
+): Promise<DispatchSummary> => {
+  await rollDispatchBudgetDay(env.DB, now);
+  await recordCronRun(env.DB, now);
+
   const feedIds = await listDueFeedIds(env.DB, now, limit);
   let dispatched = 0;
+  let budgetExhausted = false;
 
   for (const feedId of feedIds) {
     try {
       const outcome = await enqueueFeedRefresh(env, feedId, now);
       if (outcome === "enqueued") dispatched += 1;
+      if (outcome === "budget-exhausted") {
+        budgetExhausted = true;
+        break;
+      }
     } catch (error) {
-      console.error("feed dispatch failed", {
+      console.error("feed_dispatch_failed", {
         feedId,
-        error: error instanceof Error ? error.name : "unknown",
+        errorClass: error instanceof Error ? error.name : "unknown",
       });
     }
   }
 
-  return dispatched;
+  const summary = { due: feedIds.length, dispatched, budgetExhausted };
+  console.info("cron_dispatch_complete", summary);
+  return summary;
 };
 
 export const processRefreshMessage = async (

@@ -92,6 +92,9 @@ describe("worker foundation", () => {
       headers: { Authorization: "Bearer test-admin-token" },
     });
     expect(valid.status).toBe(200);
-    expect(await valid.json()).toEqual({ status: "ok" });
+    expect(await valid.json()).toMatchObject({
+      status: "ok",
+      dispatchBudget: { limit: 1600 },
+    });
   });
 });
