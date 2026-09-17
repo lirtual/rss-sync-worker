@@ -10,5 +10,25 @@
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "REFRESH_QUEUE",
+        "queue": "rss-sync-refresh"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "rss-sync-refresh",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "max_concurrency": 4
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  }
 }
