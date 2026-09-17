@@ -155,7 +155,8 @@ export const fetchFeedDocument = async (
       "User-Agent": "rss-sync-worker/0.1",
     });
     if (conditional.etag !== null) headers.set("If-None-Match", conditional.etag);
-    if (conditional.lastModified !== null) headers.set("If-Modified-Since", conditional.lastModified);
+    if (conditional.lastModified !== null)
+      headers.set("If-Modified-Since", conditional.lastModified);
 
     const response = await fetchWithTimeout(fetcher, current, { headers, redirect: "manual" });
     const location = response.headers.get("location");
