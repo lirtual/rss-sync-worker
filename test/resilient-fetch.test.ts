@@ -58,7 +58,11 @@ describe("safe feed retrieval", () => {
 describe("refresh recovery and redirect persistence", () => {
   it("records failure with backoff without deleting the subscription", async () => {
     const now = 1_820_000_000_000;
-    const feedId = await ensureSubscription(env.DB, "https://failure-resilient.example/feed.xml", now);
+    const feedId = await ensureSubscription(
+      env.DB,
+      "https://failure-resilient.example/feed.xml",
+      now,
+    );
     const message = await claimDispatch(env.DB, feedId, now);
     if (message === null) throw new Error("expected dispatch");
 
@@ -128,10 +132,12 @@ describe("refresh recovery and redirect persistence", () => {
     for (let index = 0; index < 2; index += 1) {
       const message = await claimDispatch(env.DB, feedId, now + index * 10 + 1);
       if (message === null) throw new Error("expected dispatch");
-      expect(
-        await processRefreshMessage(env, message, now + index * 10 + 2, redirectFetcher),
-      ).toBe("processed");
-      const before = await env.DB.prepare("SELECT canonical_feed_url AS url FROM feeds WHERE id = ?")
+      expect(await processRefreshMessage(env, message, now + index * 10 + 2, redirectFetcher)).toBe(
+        "processed",
+      );
+      const before = await env.DB.prepare(
+        "SELECT canonical_feed_url AS url FROM feeds WHERE id = ?",
+      )
         .bind(feedId)
         .first<{ url: string }>();
       expect(before?.url).toBe(oldUrl);
@@ -141,12 +147,16 @@ describe("refresh recovery and redirect persistence", () => {
     if (third === null) throw new Error("expected third dispatch");
     expect(await processRefreshMessage(env, third, now + 31, redirectFetcher)).toBe("processed");
 
-    const migrated = await env.DB.prepare("SELECT canonical_feed_url AS url FROM feeds WHERE id = ?")
+    const migrated = await env.DB.prepare(
+      "SELECT canonical_feed_url AS url FROM feeds WHERE id = ?",
+    )
       .bind(feedId)
       .first<{ url: string }>();
     expect(migrated?.url).toBe(newUrl);
 
-    const alias = await env.DB.prepare("SELECT feed_id AS feedId FROM feed_url_aliases WHERE url = ?")
+    const alias = await env.DB.prepare(
+      "SELECT feed_id AS feedId FROM feed_url_aliases WHERE url = ?",
+    )
       .bind(oldUrl)
       .first<{ feedId: number }>();
     expect(alias?.feedId).toBe(feedId);
@@ -158,11 +168,13 @@ describe("refresh recovery and redirect persistence", () => {
     const feedId = await ensureSubscription(env.DB, "https://window.example/feed.xml", now);
     const first = await claimDispatch(env.DB, feedId, now);
     if (first === null) throw new Error("expected dispatch");
-    await processRefreshMessage(
-      env,
-      first,
-      now + 1,
-      async () => ok(rss("one").replace("</channel>", `<item><guid>two</guid><title>two</title></item></channel>`)),
+    await processRefreshMessage(env, first, now + 1, async () =>
+      ok(
+        rss("one").replace(
+          "</channel>",
+          `<item><guid>two</guid><title>two</title></item></channel>`,
+        ),
+      ),
     );
 
     const second = await claimDispatch(env.DB, feedId, now + 2);
