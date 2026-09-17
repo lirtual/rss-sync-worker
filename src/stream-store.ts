@@ -2,6 +2,7 @@ import type { ReaderEntry, StreamCursor } from "./protocol";
 
 export interface StreamFilter {
   feedId: number | null;
+  folderName: string | null;
   unreadOnly: boolean;
   starredOnly: boolean;
 }
@@ -23,11 +24,19 @@ export const listStreamItemIds = async (
   limit: number,
 ): Promise<StreamPage> => {
   const conditions = ["s.active = 1"];
-  const bindings: Array<number> = [];
+  const bindings: Array<string | number> = [];
+  let folderJoin = "";
 
   if (filter.feedId !== null) {
     conditions.push("e.feed_id = ?");
     bindings.push(filter.feedId);
+  }
+  if (filter.folderName !== null) {
+    folderJoin = `
+       JOIN subscription_folders sf ON sf.feed_id = e.feed_id
+       JOIN folders folder ON folder.id = sf.folder_id`;
+    conditions.push("folder.name = ? COLLATE NOCASE");
+    bindings.push(filter.folderName);
   }
   if (filter.unreadOnly) conditions.push("es.is_read = 0");
   if (filter.starredOnly) conditions.push("es.is_starred = 1");
@@ -42,7 +51,7 @@ export const listStreamItemIds = async (
       `SELECT e.id, e.ingested_at AS ingestedAt
        FROM entries e
        JOIN subscriptions s ON s.feed_id = e.feed_id
-       JOIN entry_states es ON es.entry_id = e.id
+       JOIN entry_states es ON es.entry_id = e.id${folderJoin}
        WHERE ${conditions.join(" AND ")}
        ORDER BY e.ingested_at DESC, e.id DESC
        LIMIT ?`,
