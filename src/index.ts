@@ -2,6 +2,7 @@ import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
+import { mutateEntryStates } from "./state-store";
 import { ensureSubscription, listSubscriptions } from "./store";
 import { findReaderEntries, listStreamItemIds } from "./stream-store";
 
@@ -14,6 +15,7 @@ const readerRoot = "/api/reader/reader/api/0";
 const readingListStream = "user/-/state/com.google/reading-list";
 const starredStream = "user/-/state/com.google/starred";
 const readState = "user/-/state/com.google/read";
+const keptUnreadState = "user/-/state/com.google/kept-unread";
 
 const textHeaders = {
   "cache-control": "no-store",
@@ -221,6 +223,31 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
     200,
     jsonHeaders,
   );
+});
+
+app.post(`${readerRoot}/edit-tag`, async (context) => {
+  const form = await readerForm(context.req.raw);
+  const rawIds = form.getAll("i");
+  if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+
+  const ids: number[] = [];
+  for (const rawId of rawIds) {
+    const id = parseItemId(rawId);
+    if (id === null) return context.json({ error: "BadItemId" }, 400, jsonHeaders);
+    ids.push(id);
+  }
+
+  const add = new Set(form.getAll("a"));
+  const remove = new Set(form.getAll("r"));
+  const mutation: { isRead?: boolean; isStarred?: boolean } = {};
+
+  if (add.has(readState)) mutation.isRead = true;
+  if (remove.has(readState) || add.has(keptUnreadState)) mutation.isRead = false;
+  if (add.has(starredStream)) mutation.isStarred = true;
+  if (remove.has(starredStream)) mutation.isStarred = false;
+
+  await mutateEntryStates(context.env.DB, ids, mutation, Date.now());
+  return textResponse("OK\n");
 });
 
 const worker = {
