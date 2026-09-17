@@ -84,7 +84,9 @@ export const sanitizeReederRequest = async (request: Request): Promise<ReederTra
 
   return {
     method: request.method,
-    path: url.pathname.startsWith(READER_ROOT) ? url.pathname.slice(READER_ROOT.length) || "/" : url.pathname,
+    path: url.pathname.startsWith(READER_ROOT)
+      ? url.pathname.slice(READER_ROOT.length) || "/"
+      : url.pathname,
     query: sanitizeParams(url.searchParams),
     form,
   };
