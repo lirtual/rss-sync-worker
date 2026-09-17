@@ -133,7 +133,7 @@ export const deleteFolder = async (db: D1Database, name: string): Promise<void> 
 export const updateSubscription = async (
   db: D1Database,
   feedId: number,
-  changes: { active?: boolean; title?: string | null },
+  changes: { active?: boolean | undefined; title?: string | null | undefined },
   now: number,
 ): Promise<boolean> => {
   const existing = await db
