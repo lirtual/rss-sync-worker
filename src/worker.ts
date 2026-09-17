@@ -6,14 +6,19 @@ import {
   recordMaintenanceRun,
   recordQueueOutcome,
 } from "./ops-store";
+import { traceReederRequest } from "./reeder-trace";
 import { dispatchDueFeeds, processRefreshMessage } from "./refresh";
 
 const MAINTENANCE_CRON = "17 3 * * *";
 
+const pathname = (request: Request): string => new URL(request.url).pathname;
+
 const isAdminPath = (request: Request): boolean => {
-  const pathname = new URL(request.url).pathname;
-  return pathname === "/admin" || pathname.startsWith("/admin/");
+  const path = pathname(request);
+  return path === "/admin" || path.startsWith("/admin/");
 };
+
+const isReaderPath = (request: Request): boolean => pathname(request).startsWith("/api/reader/");
 
 const runMaintenance = async (env: Env, now = Date.now()): Promise<void> => {
   const deleted = await cleanupRetainedEntries(env.DB, now);
@@ -22,8 +27,9 @@ const runMaintenance = async (env: Env, now = Date.now()): Promise<void> => {
 };
 
 const worker = {
-  fetch(request, env, ctx) {
+  async fetch(request, env, ctx) {
     if (isAdminPath(request)) return adminApp.fetch(request, env, ctx);
+    if (isReaderPath(request)) await traceReederRequest(request, env.REEDER_TRACE);
     return readerWorker.fetch(request, env, ctx);
   },
   async scheduled(controller, env) {
