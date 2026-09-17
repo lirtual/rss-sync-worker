@@ -2,9 +2,9 @@ import { adminApp } from "./admin";
 import readerWorker from "./index";
 import {
   cleanupRetainedEntries,
+  RETENTION_BATCH_LIMIT,
   recordMaintenanceRun,
   recordQueueOutcome,
-  RETENTION_BATCH_LIMIT,
 } from "./ops-store";
 import { dispatchDueFeeds, processRefreshMessage } from "./refresh";
 
