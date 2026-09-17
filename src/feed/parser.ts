@@ -136,6 +136,10 @@ const parseAtom = (root: Record<string, unknown>): ParsedFeed | null => {
 };
 
 export const parseFeed = (xml: string): ParsedFeed => {
+  if (/<!DOCTYPE|<!ENTITY/iu.test(xml)) {
+    throw new Error("feed XML declarations with DTD/entities are not supported");
+  }
+
   const root = asRecord(parser.parse(xml));
   if (root === null) throw new Error("feed document is not XML data");
 
