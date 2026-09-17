@@ -11,4 +11,5 @@ interface Env {
   READER_TOKEN: string;
   ADMIN_TOKEN: string;
   DAILY_DISPATCH_BUDGET: string;
+  REEDER_TRACE: string;
 }
