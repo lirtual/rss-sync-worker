@@ -1,12 +1,12 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import { exportOpml, importOpml } from "./opml";
 import {
   configuredDispatchBudget,
   getOperationalStatus,
   isActiveFeed,
   listFeedDiagnostics,
 } from "./ops-store";
-import { exportOpml, importOpml } from "./opml";
 import { enqueueFeedRefresh } from "./refresh";
 
 const MAX_OPML_BYTES = 1024 * 1024;
