@@ -6,6 +6,7 @@ declare namespace Cloudflare {
     READER_TOKEN: string;
     ADMIN_TOKEN: string;
     DAILY_DISPATCH_BUDGET: string;
+    REEDER_TRACE: string;
     TEST_MIGRATIONS: D1Migration[];
   }
 
