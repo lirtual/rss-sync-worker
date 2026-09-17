@@ -12,7 +12,7 @@ The project intentionally does **not** provide a web reader UI. Reeder is the re
 - correct stream-wide `mark-all-as-read`
 - OPML import / export
 - lightweight operational diagnostics
-- Cloudflare Workers + D1 + Cron deployment
+- Cloudflare Workers + D1 + Cron + one Queue deployment
 
 ## Design documents
 
@@ -22,4 +22,4 @@ The project intentionally does **not** provide a web reader UI. Reeder is the re
 
 ## Non-goals for v0.1
 
-No web UI, multi-user account system, Fever API, AI features, full-text webpage extraction, image proxy, Cloudflare Queues, or generalized background-job framework.
+No web UI, multi-user account system, Fever API, AI features, full-text webpage extraction, image proxy, or generalized application-level background-job framework.
