@@ -1,10 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import {
-  cleanupRetainedEntries,
-  RETENTION_AGE_MS,
-  RETENTION_BATCH_LIMIT,
-} from "../src/ops-store";
+import { cleanupRetainedEntries, RETENTION_AGE_MS, RETENTION_BATCH_LIMIT } from "../src/ops-store";
 import { dispatchDueFeeds, enqueueFeedRefresh } from "../src/refresh";
 import { ensureSubscription } from "../src/store";
 
@@ -24,7 +20,7 @@ const insertEntry = async (
        feed_id, identity_key, source_id, title, url, author, published_at,
        source_updated_at, ingested_at, last_source_seen_at, content_status,
        created_at, updated_at
-     ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, 'empty', ?, ?)` ,
+     ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, 'empty', ?, ?)`,
   )
     .bind(feedId, identityKey, sourceId, sourceId, ingestedAt, ingestedAt, ingestedAt, ingestedAt)
     .run();
