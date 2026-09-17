@@ -20,9 +20,18 @@ describe("safe feed retrieval", () => {
       "http://169.254.169.254/latest/meta-data/",
       "http://metadata.google.internal/",
       "http://[::1]/feed",
+      "http://[fc00::1]/feed",
+      "http://[fe80::1]/feed",
     ]) {
       expect(() => assertSafeFeedUrl(value)).toThrow("not publicly routable");
     }
+  });
+
+  it("does not confuse ordinary DNS names with private IPv6 literals", () => {
+    expect(assertSafeFeedUrl("https://fca.example.com/feed.xml").hostname).toBe("fca.example.com");
+    expect(assertSafeFeedUrl("https://fd-news.example.com/feed.xml").hostname).toBe(
+      "fd-news.example.com",
+    );
   });
 
   it("sends conditional headers and handles 304 without reading a body", async () => {
