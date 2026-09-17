@@ -9,7 +9,7 @@ import {
   renameFolder,
   updateSubscription,
 } from "./folder-store";
-import { markStreamRead, type MarkAllScope } from "./mark-all-store";
+import { type MarkAllScope, markStreamRead } from "./mark-all-store";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { mutateEntryStates } from "./state-store";
