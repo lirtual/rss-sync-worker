@@ -136,9 +136,14 @@ describe("subscription bootstrap", () => {
     const message = await claimDispatch(env.DB, feedId, now);
     if (message === null) throw new Error("expected dispatch claim");
 
-    await expect(
-      processRefreshMessage(env, message, now + 1, async () => new Response("no", { status: 503 })),
-    ).rejects.toThrow("HTTP 503");
+    expect(
+      await processRefreshMessage(
+        env,
+        message,
+        now + 1,
+        async () => new Response("no", { status: 503 }),
+      ),
+    ).toBe("failed");
 
     const subscription = await env.DB.prepare(
       "SELECT bootstrapped_at AS bootstrappedAt FROM subscriptions WHERE feed_id = ?",
