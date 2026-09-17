@@ -20,6 +20,7 @@
     "check": "npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "fast-xml-parser": "5.11.1",
     "hono": "4.13.8"
   },
   "devDependencies": {
