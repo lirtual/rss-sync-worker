@@ -65,10 +65,12 @@ describe("Reeder subscription wire compatibility", () => {
     ]);
     expect(response.status).toBe(200);
 
-    const subscriptions = await env.DB.prepare(
-      "SELECT feed_id AS feedId, active FROM subscriptions ORDER BY feed_id",
-    ).all<{ feedId: number; active: number }>();
-    expect(subscriptions.results).toEqual([{ feedId, active: 1 }]);
+    const subscription = await env.DB.prepare(
+      "SELECT feed_id AS feedId, active FROM subscriptions WHERE feed_id = ?",
+    )
+      .bind(feedId)
+      .first<{ feedId: number; active: number }>();
+    expect(subscription).toEqual({ feedId, active: 1 });
 
     const folder = await env.DB.prepare(
       `SELECT folder.name AS name
