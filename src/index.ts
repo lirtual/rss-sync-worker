@@ -15,7 +15,11 @@ import { normalizeReaderStream, readerCredential, readerParams } from "./reader-
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { mutateEntryStates } from "./state-store";
 import { ensureSubscription, listSubscriptions } from "./store";
-import { findReaderEntries, listStreamItemIds } from "./stream-store";
+import {
+  findReaderEntries,
+  listStreamItemIds,
+  type StreamFilter,
+} from "./stream-store";
 
 type AppBindings = {
   Bindings: Env;
@@ -104,6 +108,94 @@ const parseFeedStream = (stream: string): number | null => {
   if (match === null) return null;
   const id = Number.parseInt(match[1] ?? "", 10);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
+};
+
+const parseSeconds = (raw: string | null): number | null => {
+  if (raw === null || raw === "") return null;
+  if (!/^\d+$/u.test(raw)) return Number.NaN;
+  const seconds = Number.parseInt(raw, 10);
+  if (
+    !Number.isSafeInteger(seconds) ||
+    seconds < 0 ||
+    seconds > Math.floor(Number.MAX_SAFE_INTEGER / 1_000)
+  ) {
+    return Number.NaN;
+  }
+  return seconds * 1_000;
+};
+
+type StreamSelection =
+  | {
+      stream: string;
+      filter: StreamFilter;
+      cursor: ReturnType<typeof decodeContinuation>;
+      limit: number;
+    }
+  | { error: "BadRequest" | "BadContinuation" | "UnsupportedFilter" | "UnsupportedStream" };
+
+const parseStreamSelection = (
+  params: URLSearchParams,
+  explicitStream?: string,
+  allowReadStream = true,
+): StreamSelection => {
+  const stream = normalizeReaderStream(explicitStream ?? params.get("s") ?? readingListStream);
+  const feedId = parseFeedStream(stream);
+  const folderName = parseLabelName(stream);
+  const includeTargets = new Set(params.getAll("it").map(normalizeReaderStream));
+  const excludeTargets = new Set(params.getAll("xt").map(normalizeReaderStream));
+  const supportedIncludes = new Set([readingListStream, readState, starredStream]);
+  const supportedExcludes = new Set([readState, starredStream]);
+
+  if ([...includeTargets].some((target) => !supportedIncludes.has(target))) {
+    return { error: "UnsupportedFilter" };
+  }
+  if ([...excludeTargets].some((target) => !supportedExcludes.has(target))) {
+    return { error: "UnsupportedFilter" };
+  }
+
+  const supportedBase =
+    stream === readingListStream ||
+    stream === starredStream ||
+    (allowReadStream && stream === readState) ||
+    feedId !== null ||
+    folderName !== null;
+  if (!supportedBase) return { error: "UnsupportedStream" };
+
+  const limit = parsePositiveInt(params.get("n"), 10_000, 10_000);
+  if (limit === null) return { error: "BadRequest" };
+
+  const afterTime = parseSeconds(params.get("ot"));
+  const beforeTime = parseSeconds(params.get("nt"));
+  if (Number.isNaN(afterTime) || Number.isNaN(beforeTime)) return { error: "BadRequest" };
+
+  const rawContinuation = params.get("c");
+  const cursor = decodeContinuation(rawContinuation);
+  if (rawContinuation !== null && cursor === null) return { error: "BadContinuation" };
+
+  return {
+    stream,
+    filter: {
+      feedId,
+      folderName,
+      unreadOnly: excludeTargets.has(readState),
+      readOnly: stream === readState || includeTargets.has(readState),
+      starredOnly: stream === starredStream || includeTargets.has(starredStream),
+      unstarredOnly: excludeTargets.has(starredStream),
+      afterTime,
+      beforeTime,
+      sortOldestFirst: params.get("r") === "o",
+    },
+    cursor,
+    limit,
+  };
+};
+
+const streamTitle = (stream: string, entries: Awaited<ReturnType<typeof findReaderEntries>>): string => {
+  if (stream === readingListStream) return "Reading List";
+  if (stream === starredStream) return "Starred";
+  const folderName = parseLabelName(stream);
+  if (folderName !== null) return folderName;
+  return entries[0]?.feedTitle ?? stream;
 };
 
 const parseLabelName = (value: string | null): string | null => {
@@ -331,74 +423,61 @@ app.get(`${readerRoot}/unread-count`, async (context) => {
 });
 
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
-  const params = context.get("readerParams");
-  const stream = normalizeReaderStream(params.get("s") ?? readingListStream);
-  const feedId = parseFeedStream(stream);
-  const folderName = parseLabelName(stream);
-  const includeTargets = new Set(params.getAll("it").map(normalizeReaderStream));
-  const excludeTargets = new Set(params.getAll("xt").map(normalizeReaderStream));
-  const readOnly = stream === readState || includeTargets.has(readState);
-  const starredOnly = stream === starredStream || includeTargets.has(starredStream);
-
-  if (
-    stream !== readingListStream &&
-    stream !== readState &&
-    stream !== starredStream &&
-    feedId === null &&
-    folderName === null
-  ) {
-    return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
-  }
-
-  const limit = parsePositiveInt(params.get("n"), 10_000, 10_000);
-  if (limit === null) return context.json({ error: "BadRequest" }, 400, jsonHeaders);
-
-  const parseSeconds = (raw: string | null): number | null => {
-    if (raw === null || raw === "") return null;
-    if (!/^\d+$/u.test(raw)) return Number.NaN;
-    const seconds = Number.parseInt(raw, 10);
-    if (
-      !Number.isSafeInteger(seconds) ||
-      seconds < 0 ||
-      seconds > Math.floor(Number.MAX_SAFE_INTEGER / 1_000)
-    ) {
-      return Number.NaN;
-    }
-    return seconds * 1_000;
-  };
-
-  const afterTime = parseSeconds(params.get("ot"));
-  const beforeTime = parseSeconds(params.get("nt"));
-  if (Number.isNaN(afterTime) || Number.isNaN(beforeTime)) {
-    return context.json({ error: "BadRequest" }, 400, jsonHeaders);
-  }
-
-  const rawContinuation = params.get("c");
-  const cursor = decodeContinuation(rawContinuation);
-  if (rawContinuation !== null && cursor === null) {
-    return context.json({ error: "BadContinuation" }, 400, jsonHeaders);
-  }
+  const selection = parseStreamSelection(context.get("readerParams"));
+  if ("error" in selection) return context.json({ error: selection.error }, 400, jsonHeaders);
 
   const page = await listStreamItemIds(
     context.env.DB,
-    {
-      feedId,
-      folderName,
-      unreadOnly: excludeTargets.has(readState),
-      readOnly,
-      starredOnly,
-      unstarredOnly: excludeTargets.has(starredStream),
-      afterTime,
-      beforeTime,
-      sortOldestFirst: params.get("r") === "o",
-    },
-    cursor,
-    limit,
+    selection.filter,
+    selection.cursor,
+    selection.limit,
   );
   const last = page.items.at(-1);
   return context.json(
     {
       itemRefs: page.items.map((item) => ({ id: String(item.id) })),
+      ...(page.hasMore && last !== undefined
+        ? { continuation: encodeContinuation({ ingestedAt: last.ingestedAt, id: last.id }) }
+        : {}),
+    },
+    200,
+    jsonHeaders,
+  );
+});
+
+const streamContentsPrefix = `${readerRoot}/stream/contents/`;
+app.get(`${readerRoot}/stream/contents/*`, async (context) => {
+  const pathname = new URL(context.req.url).pathname;
+  const encodedStream = pathname.slice(streamContentsPrefix.length);
+  let stream: string;
+  try {
+    stream = decodeURIComponent(encodedStream);
+  } catch {
+    return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
+  }
+
+  const selection = parseStreamSelection(context.get("readerParams"), stream, false);
+  if ("error" in selection) return context.json({ error: selection.error }, 400, jsonHeaders);
+
+  const page = await listStreamItemIds(
+    context.env.DB,
+    selection.filter,
+    selection.cursor,
+    selection.limit,
+  );
+  const entries = await findReaderEntries(
+    context.env.DB,
+    page.items.map((item) => item.id),
+  );
+  const last = page.items.at(-1);
+
+  return context.json(
+    {
+      direction: "ltr",
+      id: selection.stream,
+      title: streamTitle(selection.stream, entries),
+      updated: Math.floor(Date.now() / 1_000),
+      items: entries.map(googleEntry),
       ...(page.hasMore && last !== undefined
         ? { continuation: encodeContinuation({ ingestedAt: last.ingestedAt, id: last.id }) }
         : {}),
