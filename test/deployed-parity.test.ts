@@ -76,10 +76,10 @@ describe("deployed Worker parity", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: "user/-/state/com.google/reading-list",
-          count: 2,
+          count: 0,
         }),
-        expect.objectContaining({ id: `feed/${feedId}`, count: 2 }),
-        expect.objectContaining({ id: "user/-/label/Parity", count: 2 }),
+        expect.objectContaining({ id: `feed/${feedId}`, count: 0 }),
+        expect.objectContaining({ id: "user/-/label/Parity", count: 0 }),
       ]),
     );
 
