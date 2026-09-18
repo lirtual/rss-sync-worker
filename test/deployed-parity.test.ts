@@ -72,16 +72,13 @@ describe("deployed Worker parity", () => {
     const unread = (await unreadResponse.json()) as {
       unreadcounts: Array<{ id: string; count: number; newestItemTimestampUsec: string }>;
     };
-    expect(unread.unreadcounts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "user/-/state/com.google/reading-list",
-          count: 0,
-        }),
-        expect.objectContaining({ id: `feed/${feedId}`, count: 0 }),
-        expect.objectContaining({ id: "user/-/label/Parity", count: 0 }),
-      ]),
-    );
+    expect(unread.unreadcounts).toEqual([
+      {
+        id: "user/-/state/com.google/reading-list",
+        count: 0,
+        newestItemTimestampUsec: "0",
+      },
+    ]);
 
     const idsResponse = await requestReader(
       `stream/items/ids?s=${encodeURIComponent("user/1/state/com.google/reading-list")}&n=10&r=o`,
