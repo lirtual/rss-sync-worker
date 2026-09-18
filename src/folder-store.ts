@@ -94,6 +94,74 @@ export const removeFolderMembership = async (
     .run();
 };
 
+export const replaceFolderMembership = async (
+  db: D1Database,
+  feedId: number,
+  folderName: string,
+  now: number,
+): Promise<void> => {
+  const folder = await ensureFolder(db, folderName, now);
+  await db.batch([
+    db.prepare("DELETE FROM subscription_folders WHERE feed_id = ?").bind(feedId),
+    db
+      .prepare(
+        `INSERT INTO subscription_folders (feed_id, folder_id)
+         SELECT ?, ?
+         WHERE EXISTS (SELECT 1 FROM subscriptions WHERE feed_id = ?)
+         ON CONFLICT(feed_id, folder_id) DO NOTHING`,
+      )
+      .bind(feedId, folder.id, feedId),
+  ]);
+};
+
+export const deleteFoldersAndReassign = async (
+  db: D1Database,
+  names: string[],
+): Promise<void> => {
+  const normalized = [...new Set(names.map(normalizeFolderName))];
+  if (normalized.length === 0) return;
+
+  const clauses = normalized.map(() => "name = ? COLLATE NOCASE").join(" OR ");
+  const folders = await db
+    .prepare(`SELECT id, name FROM folders WHERE ${clauses} ORDER BY id`)
+    .bind(...normalized)
+    .all<FolderView>();
+  if (folders.results.length === 0) return;
+
+  const folderIds = folders.results.map((folder) => folder.id);
+  const placeholders = folderIds.map(() => "?").join(", ");
+  const replacement = await db
+    .prepare(
+      `SELECT id, name
+       FROM folders
+       WHERE id NOT IN (${placeholders})
+       ORDER BY name COLLATE NOCASE, id
+       LIMIT 1`,
+    )
+    .bind(...folderIds)
+    .first<FolderView>();
+  if (replacement === null) throw new Error("cannot delete the last folder");
+
+  await db
+    .prepare(
+      `INSERT INTO subscription_folders (feed_id, folder_id)
+       SELECT DISTINCT sf.feed_id, ?
+       FROM subscription_folders sf
+       WHERE sf.folder_id IN (${placeholders})
+         AND NOT EXISTS (
+           SELECT 1
+           FROM subscription_folders other
+           WHERE other.feed_id = sf.feed_id
+             AND other.folder_id NOT IN (${placeholders})
+         )
+       ON CONFLICT(feed_id, folder_id) DO NOTHING`,
+    )
+    .bind(replacement.id, ...folderIds, ...folderIds)
+    .run();
+
+  await db.prepare(`DELETE FROM folders WHERE id IN (${placeholders})`).bind(...folderIds).run();
+};
+
 export const renameFolder = async (
   db: D1Database,
   oldName: string,
