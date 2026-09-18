@@ -75,7 +75,9 @@ describe("Reader-state wire semantics", () => {
     ]);
     expect(response.status).toBe(200);
 
-    const state = await env.DB.prepare("SELECT is_read AS isRead FROM entry_states WHERE entry_id = ?")
+    const state = await env.DB.prepare(
+      "SELECT is_read AS isRead FROM entry_states WHERE entry_id = ?",
+    )
       .bind(entryId)
       .first<{ isRead: number }>();
     expect(state?.isRead).toBe(1);
