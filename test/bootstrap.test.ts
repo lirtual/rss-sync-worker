@@ -39,7 +39,10 @@ describe("subscription bootstrap", () => {
             ...readerHeaders,
             "content-type": "application/x-www-form-urlencoded",
           },
-          body: new URLSearchParams({ quickadd: "https://example.net/feed.xml" }),
+          body: new URLSearchParams({
+            T: "test-reader-token",
+            quickadd: "https://example.net/feed.xml",
+          }),
         }),
       );
 
@@ -50,7 +53,7 @@ describe("subscription bootstrap", () => {
     expect(await second.json()).toEqual(await first.json());
 
     const list = await exports.default.fetch(
-      new Request("https://rss-sync.test/api/reader/reader/api/0/subscription/list", {
+      new Request("https://rss-sync.test/api/reader/reader/api/0/subscription/list?output=json", {
         headers: readerHeaders,
       }),
     );

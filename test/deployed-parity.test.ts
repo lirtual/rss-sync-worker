@@ -20,7 +20,7 @@ const requestReader = (path: string, init?: RequestInit) =>
   );
 
 const postReader = (path: string, values: Array<[string, string]>) => {
-  const body = new URLSearchParams();
+  const body = new URLSearchParams([["T", "test-reader-token"]]);
   for (const [key, value] of values) body.append(key, value);
   return requestReader(path, {
     method: "POST",
@@ -51,11 +51,12 @@ describe("deployed Worker parity", () => {
 
     const folderEdit = await postReader("subscription/edit", [
       ["s", `feed/${feedId}`],
+      ["ac", "edit"],
       ["a", "user/1/label/Parity"],
     ]);
     expect(folderEdit.status).toBe(200);
 
-    const tagsResponse = await requestReader("tag/list");
+    const tagsResponse = await requestReader("tag/list?output=json");
     expect(tagsResponse.status).toBe(200);
     const tags = (await tagsResponse.json()) as {
       tags: Array<{ id: string; label?: string; type?: string }>;
@@ -81,14 +82,17 @@ describe("deployed Worker parity", () => {
     ]);
 
     const idsResponse = await requestReader(
-      `stream/items/ids?s=${encodeURIComponent("user/1/state/com.google/reading-list")}&n=10&r=o`,
+      `stream/items/ids?output=json&s=${encodeURIComponent("user/1/state/com.google/reading-list")}&n=10&r=o`,
     );
     expect(idsResponse.status).toBe(200);
     const ids = (await idsResponse.json()) as { itemRefs: Array<{ id: string }> };
     expect(ids.itemRefs).toHaveLength(2);
     expect(ids.itemRefs.every((item) => /^\d+$/u.test(item.id))).toBe(true);
 
-    const contents = new URLSearchParams();
+    const contents = new URLSearchParams([
+      ["T", "test-reader-token"],
+      ["output", "json"],
+    ]);
     for (const item of ids.itemRefs) contents.append("i", item.id);
     const contentsResponse = await requestReader("stream/items/contents", {
       method: "POST",
@@ -127,7 +131,7 @@ describe("deployed Worker parity", () => {
     expect(quickaddBody).toMatchObject({
       numResults: 1,
       query: "https://quickadd.example/feed.xml",
-      streamName: "",
+      streamName: "https://quickadd.example/feed.xml",
     });
     expect(quickaddBody.streamId).toMatch(/^feed\/\d+$/u);
 

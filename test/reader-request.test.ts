@@ -26,7 +26,8 @@ describe("Reader request normalization", () => {
     });
 
     expect(response.status).toBe(401);
-    expect(await response.text()).toBe("Error=InvalidAuthToken\n");
+    expect(await response.text()).toBe("Unauthorized");
+    expect(response.headers.get("X-Reader-Google-Bad-Token")).toBe("true");
   });
 
   it("accepts the real edit token without Authorization and rejects a placeholder alone", async () => {
@@ -70,17 +71,17 @@ describe("Reader request normalization", () => {
     )
       .bind(feedId)
       .all<{ name: string }>();
-    expect(folders.results.map((row) => row.name)).toEqual(["Body", "Query"]);
+    expect(folders.results.map((row) => row.name)).toEqual(["Query"]);
   });
 
-  it("lets form singleton values override query values while valid auth tolerates T=x", async () => {
+  it("uses T as POST authentication and lets body singleton values override query values", async () => {
     const feedId = await ensureSubscription(
       env.DB,
       "https://override.example/feed.xml",
       Date.now(),
     );
 
-    const response = await fetchReader(
+    const denied = await fetchReader(
       `subscription/edit?T=x&s=feed%2F${feedId}&ac=unsubscribe&t=QueryTitle`,
       {
         method: "POST",
@@ -92,7 +93,22 @@ describe("Reader request normalization", () => {
         ]),
       },
     );
+    expect(denied.status).toBe(401);
+
+    const response = await fetchReader(
+      `subscription/edit?T=test-reader-token&s=feed%2F${feedId}&ac=unsubscribe&t=QueryTitle`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams([
+          ["s", `feed/${feedId}`],
+          ["ac", "edit"],
+          ["t", "BodyTitle"],
+        ]),
+      },
+    );
     expect(response.status).toBe(200);
+    expect(await response.text()).toBe("OK");
 
     const state = await env.DB.prepare(
       "SELECT active, custom_title AS customTitle FROM subscriptions WHERE feed_id = ?",
@@ -119,7 +135,7 @@ describe("Reader request normalization", () => {
     );
 
     const idsResponse = await fetchReader(
-      `stream/items/ids?s=${encodeURIComponent("user/1/state/com.google/reading-list")}&n=10`,
+      `stream/items/ids?output=json&s=${encodeURIComponent("user/1/state/com.google/reading-list")}&n=10`,
       { headers: { Authorization: authHeaders.Authorization } },
     );
     expect(idsResponse.status).toBe(200);
@@ -131,7 +147,11 @@ describe("Reader request normalization", () => {
       {
         method: "POST",
         headers: authHeaders,
-        body: new URLSearchParams([["i", ids.itemRefs[1]?.id ?? ""]]),
+        body: new URLSearchParams([
+          ["T", "test-reader-token"],
+          ["output", "json"],
+          ["i", ids.itemRefs[1]?.id ?? ""],
+        ]),
       },
     );
     expect(response.status).toBe(200);
