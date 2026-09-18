@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "rss-sync-worker",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "c8901128-5005-4926-807c-9561777b15dd",
       "migrations_dir": "migrations"
     }
   ],
