@@ -45,7 +45,8 @@ describe("deployed Worker parity", () => {
       env,
       dispatch,
       now + 1,
-      async () => new Response(feed, { status: 200, headers: { "content-type": "application/rss+xml" } }),
+      async () =>
+        new Response(feed, { status: 200, headers: { "content-type": "application/rss+xml" } }),
     );
 
     const folderEdit = await postReader("subscription/edit", [
