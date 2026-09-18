@@ -97,14 +97,6 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   await next();
 };
 
-const parsePositiveInt = (value: string | null, fallback: number, max: number): number | null => {
-  if (value === null || value === "") return fallback;
-  if (!/^\d+$/u.test(value)) return null;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) return null;
-  return parsed;
-};
-
 const parseReaderLimit = (value: string | null): number => {
   if (value === null || value === "" || !/^\d+$/u.test(value)) return 10_000;
   const parsed = Number.parseInt(value, 10);
@@ -261,9 +253,7 @@ app.post("/api/reader/accounts/ClientLogin", async (context) => {
   const credential = readerToken(context.env);
   const loginResult = { SID: credential, LSID: credential, Auth: credential };
   if (form.get("output") === "json") return context.json(loginResult, 200, jsonHeaders);
-  return textResponse(
-    "SID=" + credential + "\nLSID=" + credential + "\nAuth=" + credential + "\n",
-  );
+  return textResponse(`SID=${credential}\nLSID=${credential}\nAuth=${credential}\n`);
 });
 
 app.use(`${readerRoot}/*`, requireReader);
@@ -309,7 +299,7 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
     const canonicalUrl = meta?.feedUrl ?? requestedUrl;
     const streamName = meta?.customTitle?.trim() || meta?.feedTitle?.trim() || canonicalUrl;
     return context.json(
-      { numResults: 1, query: canonicalUrl, streamId: "feed/" + feedId, streamName },
+      { numResults: 1, query: canonicalUrl, streamId: `feed/${feedId}`, streamName },
       200,
       jsonHeaders,
     );
@@ -424,7 +414,7 @@ app.post(`${readerRoot}/subscription/edit`, async (context) => {
     return textResponse("OK");
   }
 
-  return context.json({ error_message: "unrecognized action " + action }, 400, jsonHeaders);
+  return context.json({ error_message: `unrecognized action ${action}` }, 400, jsonHeaders);
 });
 
 app.get(`${readerRoot}/tag/list`, async (context) => {
@@ -675,7 +665,7 @@ app.post(`${readerRoot}/mark-all-as-read`, async (context) => {
 
 app.all(`${readerRoot}/*`, (context) => context.json([], 200, jsonHeaders));
 
-const worker = {const worker = {
+const worker = {
   fetch(request, env, ctx) {
     return app.fetch(request, env, ctx);
   },
