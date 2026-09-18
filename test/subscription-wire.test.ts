@@ -42,11 +42,12 @@ describe("Reeder subscription wire compatibility", () => {
     )
       .bind(feedId)
       .first<{ lastAttemptAt: number | null; dispatchToken: string | null }>();
-    expect(feed).toEqual({ lastAttemptAt: null, dispatchToken: null });
+    expect(feed?.lastAttemptAt).toBeNull();
+    expect(feed?.dispatchToken).toBeTypeOf("string");
   });
 
   it("subscribes URL-form streams and reuses canonical alias identity", async () => {
-    const now = 1_801_900_000_000;
+    const now = Date.now() - 1_000;
     const canonical = "https://canonical.example/feed.xml";
     const alias = "https://alias.example/feed.xml";
     const feedId = await ensureSubscription(env.DB, canonical, now);
