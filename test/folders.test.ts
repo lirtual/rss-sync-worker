@@ -114,6 +114,15 @@ describe("Miniflux-compatible folders and subscription lifecycle", () => {
     }>();
     expect(after?.id).toBe(before?.id);
 
+    const expectedReplacement = await env.DB.prepare(
+      `SELECT name
+       FROM folders
+       WHERE name <> 'New Name' COLLATE NOCASE
+       ORDER BY name COLLATE NOCASE, id
+       LIMIT 1`,
+    ).first<{ name: string }>();
+    if (expectedReplacement === null) throw new Error("expected replacement folder");
+
     const disabled = await post("disable-tag", [["s", "user/-/label/New Name"]]);
     expect(disabled.status).toBe(200);
     expect(await disabled.text()).toBe("OK");
@@ -126,7 +135,7 @@ describe("Miniflux-compatible folders and subscription lifecycle", () => {
     )
       .bind(movedFeed)
       .first<{ name: string }>();
-    expect(membership?.name).toBe("Fallback");
+    expect(membership?.name).toBe(expectedReplacement.name);
 
     const subscription = await env.DB.prepare("SELECT active FROM subscriptions WHERE feed_id = ?")
       .bind(movedFeed)
