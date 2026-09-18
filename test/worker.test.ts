@@ -27,8 +27,8 @@ describe("worker foundation", () => {
       }),
     });
 
-    expect(response.status).toBe(403);
-    expect(await response.text()).toBe("Error=BadAuthentication\n");
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error_message: "access unauthorized" });
   });
 
   it("completes ClientLogin with the configured reader credentials", async () => {
@@ -50,13 +50,15 @@ describe("worker foundation", () => {
   it("protects Google Reader protocol endpoints", async () => {
     const missing = await fetchWorker("/api/reader/reader/api/0/token");
     expect(missing.status).toBe(401);
-    expect(await missing.text()).toBe("Error=AuthRequired\n");
+    expect(await missing.text()).toBe("Unauthorized");
+    expect(missing.headers.get("X-Reader-Google-Bad-Token")).toBe("true");
 
     const invalid = await fetchWorker("/api/reader/reader/api/0/token", {
       headers: { Authorization: "GoogleLogin auth=wrong-token" },
     });
     expect(invalid.status).toBe(401);
-    expect(await invalid.text()).toBe("Error=InvalidAuthToken\n");
+    expect(await invalid.text()).toBe("Unauthorized");
+    expect(invalid.headers.get("X-Reader-Google-Bad-Token")).toBe("true");
 
     const valid = await fetchWorker("/api/reader/reader/api/0/token", {
       headers: { Authorization: "GoogleLogin auth=test-reader-token" },

@@ -35,9 +35,11 @@ const editFolder = async (feedId: number, folder: string) =>
   exports.default.fetch(
     new Request(`${root}/subscription/edit`, {
       method: "POST",
-      headers: { ...auth, "content-type": "application/x-www-form-urlencoded" },
+      headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams([
+        ["T", "test-reader-token"],
         ["s", `feed/${feedId}`],
+        ["ac", "edit"],
         ["a", `user/-/label/${folder}`],
       ]),
     }),

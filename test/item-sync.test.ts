@@ -26,10 +26,16 @@ const feedResponse = (body: string) => async (): Promise<Response> =>
   new Response(body, { status: 200, headers: { "content-type": "application/rss+xml" } });
 
 const getIds = async (query: string) => {
+  const params = new URLSearchParams(query);
+  if (!params.has("s")) params.set("s", "user/-/state/com.google/reading-list");
+  params.set("output", "json");
   const response = await exports.default.fetch(
-    new Request(`https://rss-sync.test/api/reader/reader/api/0/stream/items/ids?${query}`, {
-      headers: readerHeaders,
-    }),
+    new Request(
+      `https://rss-sync.test/api/reader/reader/api/0/stream/items/ids?${params.toString()}`,
+      {
+        headers: readerHeaders,
+      },
+    ),
   );
   const body = (await response.json()) as {
     itemRefs?: Array<{ id: string }>;
@@ -84,6 +90,8 @@ describe("Reeder item synchronization", () => {
     expect(numericIds).toHaveLength(2);
 
     const form = new URLSearchParams();
+    form.append("T", "test-reader-token");
+    form.append("output", "json");
     form.append("i", String(numericIds[0]));
     form.append("i", googleItemTag(numericIds[1] ?? 0));
     const response = await exports.default.fetch(

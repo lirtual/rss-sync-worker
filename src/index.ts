@@ -1,17 +1,22 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import {
-  addFolderMembership,
-  deleteFolder,
+  deleteFoldersAndReassign,
+  findFolderByName,
   listFolders,
   listSubscriptionFolders,
-  removeFolderMembership,
   renameFolder,
+  replaceFolderMembership,
   updateSubscription,
 } from "./folder-store";
 import { type MarkAllScope, markStreamRead } from "./mark-all-store";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
-import { normalizeReaderStream, readerCredential, readerParams } from "./reader-request";
+import {
+  normalizeReaderStream,
+  readerBodyParams,
+  readerCredential,
+  readerParams,
+} from "./reader-request";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { mutateEntryStates } from "./state-store";
 import { ensureSubscription, listSubscriptions } from "./store";
@@ -65,16 +70,16 @@ const requireReader: MiddlewareHandler<AppBindings> = async (context, next) => {
   const params = await readerParams(context.req.raw);
   context.set("readerParams", params);
 
-  const token = readerToken(context.env);
-  const credential = readerCredential(context.req.header("Authorization"));
-  const headerValid = credential !== null && (await safeEqual(credential, token));
-  const isWrite = context.req.method !== "GET" && context.req.method !== "HEAD";
-  const editToken = isWrite ? params.get("T") : null;
-  const editTokenValid = editToken !== null && (await safeEqual(editToken, token));
-
-  if (!headerValid && !editTokenValid) {
-    const error = credential === null && editToken === null ? "AuthRequired" : "InvalidAuthToken";
-    return textResponse(`Error=${error}\n`, 401);
+  const expected = readerToken(context.env);
+  const credential =
+    context.req.method === "POST"
+      ? params.get("T")
+      : readerCredential(context.req.header("Authorization"));
+  if (credential === null || !(await safeEqual(credential, expected))) {
+    return new Response("Unauthorized", {
+      status: 401,
+      headers: { ...textHeaders, "X-Reader-Google-Bad-Token": "true" },
+    });
   }
 
   await next();
@@ -92,12 +97,10 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   await next();
 };
 
-const parsePositiveInt = (value: string | null, fallback: number, max: number): number | null => {
-  if (value === null || value === "") return fallback;
-  if (!/^\d+$/u.test(value)) return null;
+const parseReaderLimit = (value: string | null): number => {
+  if (value === null || value === "" || !/^\d+$/u.test(value)) return 10_000;
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) return null;
-  return parsed;
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 10_000 ? parsed : 10_000;
 };
 
 const parseFeedStream = (stream: string): number | null => {
@@ -135,17 +138,14 @@ const parseStreamSelection = (
   explicitStream?: string,
   allowReadStream = true,
 ): StreamSelection => {
-  const stream = normalizeReaderStream(explicitStream ?? params.get("s") ?? readingListStream);
+  const streamValues = params.getAll("s");
+  if (explicitStream === undefined && streamValues.length !== 1) return { error: "BadRequest" };
+  const stream = normalizeReaderStream(explicitStream ?? streamValues[0] ?? "");
   const feedId = parseFeedStream(stream);
   const folderName = parseLabelName(stream);
-  const includeTargets = new Set(params.getAll("it").map(normalizeReaderStream));
   const excludeTargets = new Set(params.getAll("xt").map(normalizeReaderStream));
-  const supportedIncludes = new Set([readingListStream, readState, starredStream]);
   const supportedExcludes = new Set([readState, starredStream]);
 
-  if ([...includeTargets].some((target) => !supportedIncludes.has(target))) {
-    return { error: "UnsupportedFilter" };
-  }
   if ([...excludeTargets].some((target) => !supportedExcludes.has(target))) {
     return { error: "UnsupportedFilter" };
   }
@@ -157,9 +157,6 @@ const parseStreamSelection = (
     feedId !== null ||
     folderName !== null;
   if (!supportedBase) return { error: "UnsupportedStream" };
-
-  const limit = parsePositiveInt(params.get("n"), 10_000, 10_000);
-  if (limit === null) return { error: "BadRequest" };
 
   const afterTime = parseSeconds(params.get("ot"));
   const beforeTime = parseSeconds(params.get("nt"));
@@ -175,15 +172,15 @@ const parseStreamSelection = (
       feedId,
       folderName,
       unreadOnly: excludeTargets.has(readState),
-      readOnly: stream === readState || includeTargets.has(readState),
-      starredOnly: stream === starredStream || includeTargets.has(starredStream),
+      readOnly: stream === readState,
+      starredOnly: stream === starredStream,
       unstarredOnly: excludeTargets.has(starredStream),
       afterTime,
       beforeTime,
       sortOldestFirst: params.get("r") === "o",
     },
     cursor,
-    limit,
+    limit: parseReaderLimit(params.get("n")),
   };
 };
 
@@ -249,8 +246,13 @@ app.post("/api/reader/accounts/ClientLogin", async (context) => {
     safeEqual(password, readerToken(context.env)),
   ]);
 
-  if (!usernameMatches || !passwordMatches) return textResponse("Error=BadAuthentication\n", 403);
+  if (!usernameMatches || !passwordMatches) {
+    return context.json({ error_message: "access unauthorized" }, 401, jsonHeaders);
+  }
+
   const credential = readerToken(context.env);
+  const loginResult = { SID: credential, LSID: credential, Auth: credential };
+  if (form.get("output") === "json") return context.json(loginResult, 200, jsonHeaders);
   return textResponse(`SID=${credential}\nLSID=${credential}\nAuth=${credential}\n`);
 });
 
@@ -275,28 +277,43 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
   try {
     const form = context.get("readerParams");
     const requestedUrl = form.get("quickadd") ?? "";
-    if (requestedUrl.trim() === "") return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+    if (requestedUrl.trim() === "") {
+      return context.json({ error_message: "invalid URL" }, 400, jsonHeaders);
+    }
 
     const now = Date.now();
     const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
+    const meta = await context.env.DB.prepare(
+      `SELECT f.canonical_feed_url AS feedUrl,
+              f.title AS feedTitle,
+              s.custom_title AS customTitle
+       FROM feeds f
+       JOIN subscriptions s ON s.feed_id = f.id
+       WHERE f.id = ?`,
+    )
+      .bind(feedId)
+      .first<{ feedUrl: string; feedTitle: string | null; customTitle: string | null }>();
     await enqueueFeedRefresh(context.env, feedId, now);
+
+    const canonicalUrl = meta?.feedUrl ?? requestedUrl;
+    const streamName = meta?.customTitle?.trim() || meta?.feedTitle?.trim() || canonicalUrl;
     return context.json(
-      { numResults: 1, query: requestedUrl, streamId: `feed/${feedId}`, streamName: "" },
+      { numResults: 1, query: canonicalUrl, streamId: `feed/${feedId}`, streamName },
       200,
       jsonHeaders,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "subscription failed";
     const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
-    return context.json(
-      { error: status === 400 ? "BadRequest" : "ServiceUnavailable" },
-      status,
-      jsonHeaders,
-    );
+    return context.json({ error_message: message }, status, jsonHeaders);
   }
 });
 
 app.get(`${readerRoot}/subscription/list`, async (context) => {
+  if (context.get("readerParams").get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const [subscriptions, memberships] = await Promise.all([
     listSubscriptions(context.env.DB),
     listSubscriptionFolders(context.env.DB),
@@ -326,41 +343,84 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
 
 app.post(`${readerRoot}/subscription/edit`, async (context) => {
   const form = context.get("readerParams");
-  const action = form.get("ac") ?? "edit";
+  const action = form.get("ac") ?? "";
+  const streams = form.getAll("s");
+  if (streams.length === 0) {
+    return context.json({ error_message: "no valid stream IDs provided" }, 400, jsonHeaders);
+  }
+
   const now = Date.now();
-  const streamValue = form.get("s") ?? "";
-  let feedId = parseFeedStream(normalizeReaderStream(streamValue));
-  if (feedId === null && action === "subscribe" && streamValue.startsWith("feed/")) {
+  const title = form.get("t") ?? "";
+  const label = form.has("a") ? parseLabelName(form.get("a")) : null;
+  if (form.has("a") && label === null) {
+    return context.json({ error_message: "destination must be a label" }, 400, jsonHeaders);
+  }
+  if (form.has("r")) {
+    return context.json(
+      { error_message: "removing subscription labels is not supported" },
+      400,
+      jsonHeaders,
+    );
+  }
+
+  if (action === "subscribe") {
+    const stream = streams[0] ?? "";
+    if (!stream.startsWith("feed/")) {
+      return context.json({ error_message: "invalid feed stream" }, 400, jsonHeaders);
+    }
     try {
-      feedId = await ensureSubscription(context.env.DB, streamValue.slice("feed/".length), now);
+      const feedId = await ensureSubscription(context.env.DB, stream.slice("feed/".length), now);
+      if (title !== "") await updateSubscription(context.env.DB, feedId, { title }, now);
+      if (label !== null) await replaceFolderMembership(context.env.DB, feedId, label, now);
       await enqueueFeedRefresh(context.env, feedId, now);
-    } catch {
-      return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
+      return textResponse("OK");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "subscription failed";
+      return context.json({ error_message: message }, 400, jsonHeaders);
     }
   }
-  if (feedId === null) return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
-  const active = action === "subscribe" ? true : action === "unsubscribe" ? false : undefined;
-  if (action !== "edit" && active === undefined) {
-    return context.json({ error: "BadAction" }, 400, jsonHeaders);
+
+  if (action === "unsubscribe") {
+    const feedIds = streams.map((stream) => parseFeedStream(normalizeReaderStream(stream)));
+    if (feedIds.some((feedId) => feedId === null)) {
+      return context.json({ error_message: "invalid feed stream" }, 400, jsonHeaders);
+    }
+    for (const feedId of feedIds) {
+      const exists = await updateSubscription(
+        context.env.DB,
+        feedId as number,
+        { active: false },
+        now,
+      );
+      if (!exists) return context.json({ error_message: "feed not found" }, 404, jsonHeaders);
+    }
+    return textResponse("OK");
   }
 
-  const title = form.has("t") ? form.get("t") : undefined;
-  const exists = await updateSubscription(context.env.DB, feedId, { active, title }, now);
-  if (!exists) return context.json({ error: "UnknownSubscription" }, 404, jsonHeaders);
-
-  for (const value of form.getAll("a")) {
-    const name = parseLabelName(value);
-    if (name !== null) await addFolderMembership(context.env.DB, feedId, name, now);
+  if (action === "edit") {
+    const feedId = parseFeedStream(normalizeReaderStream(streams[0] ?? ""));
+    if (feedId === null) {
+      return context.json({ error_message: "invalid feed stream" }, 400, jsonHeaders);
+    }
+    const exists = await updateSubscription(
+      context.env.DB,
+      feedId,
+      { title: form.has("t") ? title : undefined },
+      now,
+    );
+    if (!exists) return context.json({ error_message: "feed not found" }, 404, jsonHeaders);
+    if (label !== null) await replaceFolderMembership(context.env.DB, feedId, label, now);
+    return textResponse("OK");
   }
-  for (const value of form.getAll("r")) {
-    const name = parseLabelName(value);
-    if (name !== null) await removeFolderMembership(context.env.DB, feedId, name);
-  }
 
-  return textResponse("OK\n");
+  return context.json({ error_message: `unrecognized action ${action}` }, 400, jsonHeaders);
 });
 
 app.get(`${readerRoot}/tag/list`, async (context) => {
+  if (context.get("readerParams").get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const folders = await listFolders(context.env.DB);
   return context.json(
     {
@@ -383,18 +443,28 @@ app.post(`${readerRoot}/rename-tag`, async (context) => {
   const source = parseLabelName(form.get("s"));
   const destination = parseLabelName(form.get("dest"));
   if (source === null || destination === null) {
-    return context.json({ error: "BadTag" }, 400, jsonHeaders);
+    return context.json({ error_message: "invalid label" }, 400, jsonHeaders);
+  }
+  if ((await findFolderByName(context.env.DB, source)) === null) {
+    return context.json({ error_message: "label not found" }, 404, jsonHeaders);
   }
   await renameFolder(context.env.DB, source, destination, Date.now());
-  return textResponse("OK\n");
+  return textResponse("OK");
 });
 
 app.post(`${readerRoot}/disable-tag`, async (context) => {
   const form = context.get("readerParams");
-  const name = parseLabelName(form.get("s"));
-  if (name === null) return context.json({ error: "BadTag" }, 400, jsonHeaders);
-  await deleteFolder(context.env.DB, name);
-  return textResponse("OK\n");
+  const names = form.getAll("s").map((value) => parseLabelName(value));
+  if (names.length === 0 || names.some((name) => name === null)) {
+    return context.json({ error_message: "only labels are supported" }, 400, jsonHeaders);
+  }
+  try {
+    await deleteFoldersAndReassign(context.env.DB, names as string[]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "tag deletion failed";
+    return context.json({ error_message: message }, 400, jsonHeaders);
+  }
+  return textResponse("OK");
 });
 
 app.get(`${readerRoot}/unread-count`, async (context) => {
@@ -403,6 +473,10 @@ app.get(`${readerRoot}/unread-count`, async (context) => {
 });
 
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
+  if (context.get("readerParams").get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const selection = parseStreamSelection(context.get("readerParams"));
   if ("error" in selection) return context.json({ error: selection.error }, 400, jsonHeaders);
 
@@ -469,17 +543,30 @@ app.get(`${readerRoot}/stream/contents/*`, async (context) => {
 
 app.post(`${readerRoot}/stream/items/contents`, async (context) => {
   const form = context.get("readerParams");
+  if (form.get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const rawIds = form.getAll("i");
-  if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+  if (rawIds.length > 1_000) {
+    return context.json({ error_message: "too many items" }, 400, jsonHeaders);
+  }
 
   const ids: number[] = [];
   for (const value of rawIds) {
     const id = parseItemId(value);
-    if (id === null) return context.json({ error: "BadItemId" }, 400, jsonHeaders);
+    if (id === null) {
+      return context.json({ error_message: "invalid item ID" }, 400, jsonHeaders);
+    }
     ids.push(id);
   }
 
   const entries = await findReaderEntries(context.env.DB, ids);
+  const direction = form.get("r") === "o" ? 1 : -1;
+  entries.sort(
+    (left, right) => direction * (left.ingestedAt - right.ingestedAt || left.id - right.id),
+  );
+
   return context.json(
     {
       direction: "ltr",
@@ -502,24 +589,44 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
 
 app.post(`${readerRoot}/edit-tag`, async (context) => {
   const form = context.get("readerParams");
+  const body = await readerBodyParams(context.req.raw);
   const rawIds = form.getAll("i");
-  if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+  if (rawIds.length > 1_000) {
+    return context.json({ error_message: "too many items" }, 400, jsonHeaders);
+  }
 
   const ids: number[] = [];
   for (const rawId of rawIds) {
     const id = parseItemId(rawId);
-    if (id === null) return context.json({ error: "BadItemId" }, 400, jsonHeaders);
+    if (id === null) {
+      return context.json({ error_message: "invalid item ID" }, 400, jsonHeaders);
+    }
     ids.push(id);
   }
 
-  const add = new Set(form.getAll("a").map(normalizeReaderStream));
-  const remove = new Set(form.getAll("r").map(normalizeReaderStream));
+  const add = new Set(body.getAll("a").map(normalizeReaderStream));
+  const remove = new Set(body.getAll("r").map(normalizeReaderStream));
+  const ignoredStates = new Set([
+    "user/-/state/com.google/broadcast",
+    "user/-/state/com.google/like",
+    "user/-/state/com.google/tracking-kept-unread",
+  ]);
+  const supportedStates = new Set([readState, keptUnreadState, starredStream, ...ignoredStates]);
+  const requestedStates = [...add, ...remove];
+  if (
+    ids.length === 0 ||
+    requestedStates.length === 0 ||
+    requestedStates.some((value) => !supportedStates.has(value))
+  ) {
+    return context.json({ error_message: "unsupported tag mutation" }, 400, jsonHeaders);
+  }
+
   const readTrue = add.has(readState) || remove.has(keptUnreadState);
   const readFalse = remove.has(readState) || add.has(keptUnreadState);
   const starredTrue = add.has(starredStream);
   const starredFalse = remove.has(starredStream);
   if ((readTrue && readFalse) || (starredTrue && starredFalse)) {
-    return context.json({ error: "ContradictoryStateMutation" }, 400, jsonHeaders);
+    return context.json({ error_message: "contradictory state mutation" }, 400, jsonHeaders);
   }
 
   const mutation: { isRead?: boolean; isStarred?: boolean } = {};
@@ -529,21 +636,30 @@ app.post(`${readerRoot}/edit-tag`, async (context) => {
   if (starredFalse) mutation.isStarred = false;
 
   await mutateEntryStates(context.env.DB, ids, mutation, Date.now());
-  return textResponse("OK\n");
+  return textResponse("OK");
 });
 
 app.post(`${readerRoot}/mark-all-as-read`, async (context) => {
   const form = context.get("readerParams");
-  const scope = parseMarkAllScope(form.get("s") ?? readingListStream);
-  if (scope === null) return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
+  const cutoff = parseReaderCutoffMs(form.get("ts"), Date.now());
+  if (cutoff === null) {
+    return context.json({ error_message: "invalid timestamp" }, 400, jsonHeaders);
+  }
 
-  const changedAt = Date.now();
-  const cutoffMs = parseReaderCutoffMs(form.get("ts"), changedAt);
-  if (cutoffMs === null) return context.json({ error: "BadTimestamp" }, 400, jsonHeaders);
+  const scope = parseMarkAllScope(form.get("s") ?? "");
+  if (scope === null) return textResponse("OK");
+  if (
+    scope.kind === "folder" &&
+    (await findFolderByName(context.env.DB, scope.folderName)) === null
+  ) {
+    return context.json({ error_message: "label not found" }, 404, jsonHeaders);
+  }
 
-  await markStreamRead(context.env.DB, scope, cutoffMs, changedAt);
-  return textResponse("OK\n");
+  await markStreamRead(context.env.DB, scope, cutoff, Date.now());
+  return textResponse("OK");
 });
+
+app.all(`${readerRoot}/*`, (context) => context.json([], 200, jsonHeaders));
 
 const worker = {
   fetch(request, env, ctx) {
