@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 10
     env:
       CLOUDFLARE_ACCOUNT_ID: 8bb496011403552e785ea1b834daffdf
+      WORKER_NAME: rss-sync-worker
       CF_TOKEN_PRIMARY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CF_TOKEN_FALLBACK: ${{ secrets.CF_API_TOKEN }}
     steps:
@@ -42,18 +43,65 @@ jobs:
       - name: Verify release candidate
         run: npm run check
 
-      - name: Enable sanitized Reeder trace for release gate
+      - name: Upload immutable Worker version
+        id: upload
+        shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path("wrangler.jsonc")
-          s = p.read_text()
-          old = '"REEDER_TRACE": "0"'
-          new = '"REEDER_TRACE": "1"'
-          if old not in s:
-              raise SystemExit("expected REEDER_TRACE=0 in wrangler.jsonc")
-          p.write_text(s.replace(old, new, 1))
-          PY
+          set -euo pipefail
+          test -s dist/worker.js
 
-      - name: Deploy release candidate
-        run: npx wrangler deploy
+          metadata="$(jq -nc \
+            --arg sha "${GITHUB_SHA}" \
+            '{
+              main_module:"worker.js",
+              compatibility_date:"2026-09-17",
+              bindings:[
+                {type:"inherit",name:"DAILY_DISPATCH_BUDGET"},
+                {type:"inherit",name:"DB"},
+                {type:"inherit",name:"PASSWORD"},
+                {type:"inherit",name:"REEDER_TRACE"},
+                {type:"inherit",name:"REFRESH_QUEUE"},
+                {type:"inherit",name:"USERNAME"}
+              ],
+              annotations:{
+                "workers/commit_sha":$sha,
+                "workers/message":"Reeder compatibility release candidate"
+              }
+            }')"
+
+          response="$(curl --fail-with-body -sS \
+            -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/versions" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -F "metadata=${metadata};type=application/json" \
+            -F "worker.js=@dist/worker.js;type=application/javascript+module")"
+
+          echo "${response}" | jq -e '.success == true' >/dev/null
+          version_id="$(echo "${response}" | jq -r '.result.id')"
+          test -n "${version_id}" && test "${version_id}" != "null"
+          echo "version_id=${version_id}" >> "${GITHUB_OUTPUT}"
+
+      - name: Deploy version at 100 percent
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc \
+            --arg version_id "${{ steps.upload.outputs.version_id }}" \
+            '{
+              strategy:"percentage",
+              versions:[{percentage:100,version_id:$version_id}],
+              annotations:{
+                "workers/message":"Reeder compatibility release candidate",
+                "workers/triggered_by":"github-actions"
+              }
+            }')"
+
+          response="$(curl --fail-with-body -sS \
+            -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/deployments" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "${payload}")"
+
+          echo "${response}" | jq -e '.success == true' >/dev/null
+          echo "${response}" | jq '{success,result:{id,created_on,strategy,versions,annotations}}'
