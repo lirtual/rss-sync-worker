@@ -1,17 +1,22 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import {
-  addFolderMembership,
-  deleteFolder,
+  deleteFoldersAndReassign,
+  findFolderByName,
   listFolders,
   listSubscriptionFolders,
-  removeFolderMembership,
   renameFolder,
+  replaceFolderMembership,
   updateSubscription,
 } from "./folder-store";
 import { type MarkAllScope, markStreamRead } from "./mark-all-store";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
-import { normalizeReaderStream, readerCredential, readerParams } from "./reader-request";
+import {
+  normalizeReaderStream,
+  readerBodyParams,
+  readerCredential,
+  readerParams,
+} from "./reader-request";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { mutateEntryStates } from "./state-store";
 import { ensureSubscription, listSubscriptions } from "./store";
@@ -65,16 +70,16 @@ const requireReader: MiddlewareHandler<AppBindings> = async (context, next) => {
   const params = await readerParams(context.req.raw);
   context.set("readerParams", params);
 
-  const token = readerToken(context.env);
-  const credential = readerCredential(context.req.header("Authorization"));
-  const headerValid = credential !== null && (await safeEqual(credential, token));
-  const isWrite = context.req.method !== "GET" && context.req.method !== "HEAD";
-  const editToken = isWrite ? params.get("T") : null;
-  const editTokenValid = editToken !== null && (await safeEqual(editToken, token));
-
-  if (!headerValid && !editTokenValid) {
-    const error = credential === null && editToken === null ? "AuthRequired" : "InvalidAuthToken";
-    return textResponse(`Error=${error}\n`, 401);
+  const expected = readerToken(context.env);
+  const credential =
+    context.req.method === "POST"
+      ? params.get("T")
+      : readerCredential(context.req.header("Authorization"));
+  if (credential === null || !(await safeEqual(credential, expected))) {
+    return new Response("Unauthorized", {
+      status: 401,
+      headers: { ...textHeaders, "X-Reader-Google-Bad-Token": "true" },
+    });
   }
 
   await next();
@@ -98,6 +103,12 @@ const parsePositiveInt = (value: string | null, fallback: number, max: number): 
   const parsed = Number.parseInt(value, 10);
   if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max) return null;
   return parsed;
+};
+
+const parseReaderLimit = (value: string | null): number => {
+  if (value === null || value === "" || !/^\d+$/u.test(value)) return 10_000;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 10_000 ? parsed : 10_000;
 };
 
 const parseFeedStream = (stream: string): number | null => {
@@ -135,17 +146,14 @@ const parseStreamSelection = (
   explicitStream?: string,
   allowReadStream = true,
 ): StreamSelection => {
-  const stream = normalizeReaderStream(explicitStream ?? params.get("s") ?? readingListStream);
+  const streamValues = params.getAll("s");
+  if (explicitStream === undefined && streamValues.length !== 1) return { error: "BadRequest" };
+  const stream = normalizeReaderStream(explicitStream ?? streamValues[0] ?? "");
   const feedId = parseFeedStream(stream);
   const folderName = parseLabelName(stream);
-  const includeTargets = new Set(params.getAll("it").map(normalizeReaderStream));
   const excludeTargets = new Set(params.getAll("xt").map(normalizeReaderStream));
-  const supportedIncludes = new Set([readingListStream, readState, starredStream]);
   const supportedExcludes = new Set([readState, starredStream]);
 
-  if ([...includeTargets].some((target) => !supportedIncludes.has(target))) {
-    return { error: "UnsupportedFilter" };
-  }
   if ([...excludeTargets].some((target) => !supportedExcludes.has(target))) {
     return { error: "UnsupportedFilter" };
   }
@@ -157,9 +165,6 @@ const parseStreamSelection = (
     feedId !== null ||
     folderName !== null;
   if (!supportedBase) return { error: "UnsupportedStream" };
-
-  const limit = parsePositiveInt(params.get("n"), 10_000, 10_000);
-  if (limit === null) return { error: "BadRequest" };
 
   const afterTime = parseSeconds(params.get("ot"));
   const beforeTime = parseSeconds(params.get("nt"));
@@ -175,15 +180,15 @@ const parseStreamSelection = (
       feedId,
       folderName,
       unreadOnly: excludeTargets.has(readState),
-      readOnly: stream === readState || includeTargets.has(readState),
-      starredOnly: stream === starredStream || includeTargets.has(starredStream),
+      readOnly: stream === readState,
+      starredOnly: stream === starredStream,
       unstarredOnly: excludeTargets.has(starredStream),
       afterTime,
       beforeTime,
       sortOldestFirst: params.get("r") === "o",
     },
     cursor,
-    limit,
+    limit: parseReaderLimit(params.get("n")),
   };
 };
 
