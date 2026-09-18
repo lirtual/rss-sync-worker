@@ -102,15 +102,7 @@ describe("mark-all-as-read", () => {
        ) VALUES (?, ?, 'late', 'Late', 'https://bulk-global.example/article/late',
                  NULL, ?, NULL, ?, ?, 'empty', ?, ?)`,
     )
-      .bind(
-        feedId,
-        "f".repeat(64),
-        cutoff + 1,
-        cutoff + 1,
-        cutoff + 1,
-        cutoff + 1,
-        cutoff + 1,
-      )
+      .bind(feedId, "f".repeat(64), cutoff + 1, cutoff + 1, cutoff + 1, cutoff + 1, cutoff + 1)
       .run();
     const late = await env.DB.prepare(
       "SELECT id FROM entries WHERE feed_id = ? AND source_id = 'late'",
