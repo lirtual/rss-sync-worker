@@ -78,7 +78,9 @@ const parseRss = (root: Record<string, unknown>): ParsedFeed | null => {
   const channel = asRecord(rss?.channel);
   if (channel === null) return null;
 
-  const entries = asArray(channel.item).slice(0, MAX_PARSED_ENTRIES).map((raw): ParsedEntry => {
+  const entries = asArray(channel.item)
+    .slice(0, MAX_PARSED_ENTRIES)
+    .map((raw): ParsedEntry => {
     const item = asRecord(raw) ?? {};
     const sourceId = text(item.guid) || null;
     const url = text(item.link) || null;
@@ -96,7 +98,7 @@ const parseRss = (root: Record<string, unknown>): ParsedFeed | null => {
       sourceUpdatedAt,
       contentHtml,
     };
-  });
+    });
 
   return {
     title: text(channel.title) || "Untitled feed",
@@ -109,7 +111,9 @@ const parseAtom = (root: Record<string, unknown>): ParsedFeed | null => {
   const feed = asRecord(root.feed);
   if (feed === null) return null;
 
-  const entries = asArray(feed.entry).slice(0, MAX_PARSED_ENTRIES).map((raw): ParsedEntry => {
+  const entries = asArray(feed.entry)
+    .slice(0, MAX_PARSED_ENTRIES)
+    .map((raw): ParsedEntry => {
     const entry = asRecord(raw) ?? {};
     const sourceId = text(entry.id) || null;
     const url = atomLink(entry.link);
@@ -127,7 +131,7 @@ const parseAtom = (root: Record<string, unknown>): ParsedFeed | null => {
       sourceUpdatedAt,
       contentHtml,
     };
-  });
+    });
 
   return {
     title: text(feed.title) || "Untitled feed",
