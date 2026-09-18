@@ -11,6 +11,7 @@ import {
 } from "./folder-store";
 import { type MarkAllScope, markStreamRead } from "./mark-all-store";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
+import { normalizeReaderStream, readerCredential, readerParams } from "./reader-request";
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { mutateEntryStates } from "./state-store";
 import { ensureSubscription, listSubscriptions } from "./store";
@@ -18,6 +19,9 @@ import { findReaderEntries, listStreamItemIds } from "./stream-store";
 
 type AppBindings = {
   Bindings: Env;
+  Variables: {
+    readerParams: URLSearchParams;
+  };
 };
 
 const app = new Hono<AppBindings>();
@@ -56,18 +60,22 @@ const safeEqual = async (left: string, right: string): Promise<boolean> => {
   return difference === 0;
 };
 
-const readerCredential = (authorization: string | undefined): string | null => {
-  if (authorization === undefined) return null;
-  const match = /^GoogleLogin auth=([^\s]+)$/u.exec(authorization);
-  return match?.[1] ?? null;
-};
-
 const requireReader: MiddlewareHandler<AppBindings> = async (context, next) => {
+  const params = await readerParams(context.req.raw);
+  context.set("readerParams", params);
+
+  const token = readerToken(context.env);
   const credential = readerCredential(context.req.header("Authorization"));
-  if (credential === null) return textResponse("Error=AuthRequired\n", 401);
-  if (!(await safeEqual(credential, readerToken(context.env)))) {
-    return textResponse("Error=InvalidAuthToken\n", 403);
+  const headerValid = credential !== null && (await safeEqual(credential, token));
+  const isWrite = context.req.method !== "GET" && context.req.method !== "HEAD";
+  const editToken = isWrite ? params.get("T") : null;
+  const editTokenValid = editToken !== null && (await safeEqual(editToken, token));
+
+  if (!headerValid && !editTokenValid) {
+    const error = credential === null && editToken === null ? "AuthRequired" : "InvalidAuthToken";
+    return textResponse(`Error=${error}\n`, 401);
   }
+
   await next();
 };
 
@@ -83,9 +91,6 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   await next();
 };
 
-const readerForm = async (request: Request): Promise<URLSearchParams> =>
-  new URLSearchParams(await request.text());
-
 const parsePositiveInt = (value: string | null, fallback: number, max: number): number | null => {
   if (value === null || value === "") return fallback;
   if (!/^\d+$/u.test(value)) return null;
@@ -100,8 +105,6 @@ const parseFeedStream = (stream: string): number | null => {
   const id = Number.parseInt(match[1] ?? "", 10);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
-
-const normalizeReaderStream = (value: string): string => value.replace(/^user\/\d+\//u, "user/-/");
 
 const parseLabelName = (value: string | null): string | null => {
   if (value === null) return null;
@@ -137,7 +140,7 @@ app.use("/admin/*", requireAdmin);
 app.get("/admin/status", (context) => context.json({ status: "ok" }, 200, jsonHeaders));
 
 app.post("/api/reader/accounts/ClientLogin", async (context) => {
-  const form = await readerForm(context.req.raw);
+  const form = await readerParams(context.req.raw);
   const username = form.get("Email") ?? "";
   const password = form.get("Passwd") ?? "";
   const [usernameMatches, passwordMatches] = await Promise.all([
@@ -169,7 +172,7 @@ app.get(`${readerRoot}/user-info`, (context) =>
 
 app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
   try {
-    const form = await readerForm(context.req.raw);
+    const form = context.get("readerParams");
     const requestedUrl = form.get("quickadd") ?? "";
     if (requestedUrl.trim() === "") return context.json({ error: "BadRequest" }, 400, jsonHeaders);
 
@@ -221,7 +224,7 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
 });
 
 app.post(`${readerRoot}/subscription/edit`, async (context) => {
-  const form = await readerForm(context.req.raw);
+  const form = context.get("readerParams");
   const action = form.get("ac") ?? "edit";
   const now = Date.now();
   const streamValue = form.get("s") ?? "";
@@ -275,7 +278,7 @@ app.get(`${readerRoot}/tag/list`, async (context) => {
 });
 
 app.post(`${readerRoot}/rename-tag`, async (context) => {
-  const form = await readerForm(context.req.raw);
+  const form = context.get("readerParams");
   const source = parseLabelName(form.get("s"));
   const destination = parseLabelName(form.get("dest"));
   if (source === null || destination === null) {
@@ -286,7 +289,7 @@ app.post(`${readerRoot}/rename-tag`, async (context) => {
 });
 
 app.post(`${readerRoot}/disable-tag`, async (context) => {
-  const form = await readerForm(context.req.raw);
+  const form = context.get("readerParams");
   const name = parseLabelName(form.get("s"));
   if (name === null) return context.json({ error: "BadTag" }, 400, jsonHeaders);
   await deleteFolder(context.env.DB, name);
@@ -328,12 +331,12 @@ app.get(`${readerRoot}/unread-count`, async (context) => {
 });
 
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
-  const url = new URL(context.req.url);
-  const stream = normalizeReaderStream(url.searchParams.get("s") ?? readingListStream);
+  const params = context.get("readerParams");
+  const stream = normalizeReaderStream(params.get("s") ?? readingListStream);
   const feedId = parseFeedStream(stream);
   const folderName = parseLabelName(stream);
-  const includeTargets = new Set(url.searchParams.getAll("it").map(normalizeReaderStream));
-  const excludeTargets = new Set(url.searchParams.getAll("xt").map(normalizeReaderStream));
+  const includeTargets = new Set(params.getAll("it").map(normalizeReaderStream));
+  const excludeTargets = new Set(params.getAll("xt").map(normalizeReaderStream));
   const readOnly = stream === readState || includeTargets.has(readState);
   const starredOnly = stream === starredStream || includeTargets.has(starredStream);
 
@@ -347,7 +350,7 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
     return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
   }
 
-  const limit = parsePositiveInt(url.searchParams.get("n"), 10_000, 10_000);
+  const limit = parsePositiveInt(params.get("n"), 10_000, 10_000);
   if (limit === null) return context.json({ error: "BadRequest" }, 400, jsonHeaders);
 
   const parseSeconds = (raw: string | null): number | null => {
@@ -364,13 +367,13 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
     return seconds * 1_000;
   };
 
-  const afterTime = parseSeconds(url.searchParams.get("ot"));
-  const beforeTime = parseSeconds(url.searchParams.get("nt"));
+  const afterTime = parseSeconds(params.get("ot"));
+  const beforeTime = parseSeconds(params.get("nt"));
   if (Number.isNaN(afterTime) || Number.isNaN(beforeTime)) {
     return context.json({ error: "BadRequest" }, 400, jsonHeaders);
   }
 
-  const rawContinuation = url.searchParams.get("c");
+  const rawContinuation = params.get("c");
   const cursor = decodeContinuation(rawContinuation);
   if (rawContinuation !== null && cursor === null) {
     return context.json({ error: "BadContinuation" }, 400, jsonHeaders);
@@ -387,7 +390,7 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
       unstarredOnly: excludeTargets.has(starredStream),
       afterTime,
       beforeTime,
-      sortOldestFirst: url.searchParams.get("r") === "o",
+      sortOldestFirst: params.get("r") === "o",
     },
     cursor,
     limit,
@@ -406,7 +409,7 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
 });
 
 app.post(`${readerRoot}/stream/items/contents`, async (context) => {
-  const form = await readerForm(context.req.raw);
+  const form = context.get("readerParams");
   const rawIds = form.getAll("i");
   if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
 
@@ -439,7 +442,7 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
 });
 
 app.post(`${readerRoot}/edit-tag`, async (context) => {
-  const form = await readerForm(context.req.raw);
+  const form = context.get("readerParams");
   const rawIds = form.getAll("i");
   if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
 
@@ -464,7 +467,7 @@ app.post(`${readerRoot}/edit-tag`, async (context) => {
 });
 
 app.post(`${readerRoot}/mark-all-as-read`, async (context) => {
-  const form = await readerForm(context.req.raw);
+  const form = context.get("readerParams");
   const scope = parseMarkAllScope(form.get("s") ?? readingListStream);
   if (scope === null) return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
 
