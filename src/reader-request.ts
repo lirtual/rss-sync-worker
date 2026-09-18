@@ -35,7 +35,6 @@ export const readerParams = async (request: Request): Promise<URLSearchParams> =
   return merged;
 };
 
-
 export const readerBodyParams = async (request: Request): Promise<URLSearchParams> => {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   if (!contentType.startsWith("application/x-www-form-urlencoded")) return new URLSearchParams();
