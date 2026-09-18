@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rss-sync-worker",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-17",
+  "workers_dev": false,
+  "vars": {
+    "DAILY_DISPATCH_BUDGET": "1600",
+    "REEDER_TRACE": "0"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rss-sync-worker",
+      "database_id": "c8901128-5005-4926-807c-9561777b15dd",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "REFRESH_QUEUE",
+        "queue": "rss-sync-refresh"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "rss-sync-refresh",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "max_concurrency": 4
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *", "17 3 * * *"]
+  }
+}
