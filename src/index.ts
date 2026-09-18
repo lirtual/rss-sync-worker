@@ -484,6 +484,10 @@ app.get(`${readerRoot}/unread-count`, async (context) => {
 });
 
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
+  if (context.get("readerParams").get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const selection = parseStreamSelection(context.get("readerParams"));
   if ("error" in selection) return context.json({ error: selection.error }, 400, jsonHeaders);
 
@@ -550,17 +554,31 @@ app.get(`${readerRoot}/stream/contents/*`, async (context) => {
 
 app.post(`${readerRoot}/stream/items/contents`, async (context) => {
   const form = context.get("readerParams");
+  if (form.get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const rawIds = form.getAll("i");
-  if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+  if (rawIds.length > 1_000) {
+    return context.json({ error_message: "too many items" }, 400, jsonHeaders);
+  }
 
   const ids: number[] = [];
   for (const value of rawIds) {
     const id = parseItemId(value);
-    if (id === null) return context.json({ error: "BadItemId" }, 400, jsonHeaders);
+    if (id === null) {
+      return context.json({ error_message: "invalid item ID" }, 400, jsonHeaders);
+    }
     ids.push(id);
   }
 
   const entries = await findReaderEntries(context.env.DB, ids);
+  const direction = form.get("r") === "o" ? 1 : -1;
+  entries.sort(
+    (left, right) =>
+      direction * ((left.ingestedAt - right.ingestedAt) || (left.id - right.id)),
+  );
+
   return context.json(
     {
       direction: "ltr",
@@ -568,8 +586,10 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
       title: "Reading List",
       self: [
         {
-          href: new URL(`${readerRoot}/stream/items/contents`, new URL(context.req.url).origin)
-            .href,
+          href: new URL(
+            `${readerRoot}/stream/items/contents`,
+            new URL(context.req.url).origin,
+          ).href,
         },
       ],
       author: readerUsername(context.env),
@@ -583,24 +603,44 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
 
 app.post(`${readerRoot}/edit-tag`, async (context) => {
   const form = context.get("readerParams");
+  const body = await readerBodyParams(context.req.raw);
   const rawIds = form.getAll("i");
-  if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+  if (rawIds.length > 1_000) {
+    return context.json({ error_message: "too many items" }, 400, jsonHeaders);
+  }
 
   const ids: number[] = [];
   for (const rawId of rawIds) {
     const id = parseItemId(rawId);
-    if (id === null) return context.json({ error: "BadItemId" }, 400, jsonHeaders);
+    if (id === null) {
+      return context.json({ error_message: "invalid item ID" }, 400, jsonHeaders);
+    }
     ids.push(id);
   }
 
-  const add = new Set(form.getAll("a").map(normalizeReaderStream));
-  const remove = new Set(form.getAll("r").map(normalizeReaderStream));
+  const add = new Set(body.getAll("a").map(normalizeReaderStream));
+  const remove = new Set(body.getAll("r").map(normalizeReaderStream));
+  const ignoredStates = new Set([
+    "user/-/state/com.google/broadcast",
+    "user/-/state/com.google/like",
+    "user/-/state/com.google/tracking-kept-unread",
+  ]);
+  const supportedStates = new Set([readState, keptUnreadState, starredStream, ...ignoredStates]);
+  const requestedStates = [...add, ...remove];
+  if (
+    ids.length === 0 ||
+    requestedStates.length === 0 ||
+    requestedStates.some((value) => !supportedStates.has(value))
+  ) {
+    return context.json({ error_message: "unsupported tag mutation" }, 400, jsonHeaders);
+  }
+
   const readTrue = add.has(readState) || remove.has(keptUnreadState);
   const readFalse = remove.has(readState) || add.has(keptUnreadState);
   const starredTrue = add.has(starredStream);
   const starredFalse = remove.has(starredStream);
   if ((readTrue && readFalse) || (starredTrue && starredFalse)) {
-    return context.json({ error: "ContradictoryStateMutation" }, 400, jsonHeaders);
+    return context.json({ error_message: "contradictory state mutation" }, 400, jsonHeaders);
   }
 
   const mutation: { isRead?: boolean; isStarred?: boolean } = {};
@@ -610,23 +650,32 @@ app.post(`${readerRoot}/edit-tag`, async (context) => {
   if (starredFalse) mutation.isStarred = false;
 
   await mutateEntryStates(context.env.DB, ids, mutation, Date.now());
-  return textResponse("OK\n");
+  return textResponse("OK");
 });
 
 app.post(`${readerRoot}/mark-all-as-read`, async (context) => {
   const form = context.get("readerParams");
-  const scope = parseMarkAllScope(form.get("s") ?? readingListStream);
-  if (scope === null) return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
+  const cutoff = parseReaderCutoffMs(form.get("ts"), Date.now());
+  if (cutoff === null) {
+    return context.json({ error_message: "invalid timestamp" }, 400, jsonHeaders);
+  }
 
-  const changedAt = Date.now();
-  const cutoffMs = parseReaderCutoffMs(form.get("ts"), changedAt);
-  if (cutoffMs === null) return context.json({ error: "BadTimestamp" }, 400, jsonHeaders);
+  const scope = parseMarkAllScope(form.get("s") ?? "");
+  if (scope === null) return textResponse("OK");
+  if (
+    scope.kind === "folder" &&
+    (await findFolderByName(context.env.DB, scope.folderName)) === null
+  ) {
+    return context.json({ error_message: "label not found" }, 404, jsonHeaders);
+  }
 
-  await markStreamRead(context.env.DB, scope, cutoffMs, changedAt);
-  return textResponse("OK\n");
+  await markStreamRead(context.env.DB, scope, cutoff, Date.now());
+  return textResponse("OK");
 });
 
-const worker = {
+app.all(`${readerRoot}/*`, (context) => context.json([], 200, jsonHeaders));
+
+const worker = {const worker = {
   fetch(request, env, ctx) {
     return app.fetch(request, env, ctx);
   },
