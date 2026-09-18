@@ -30,7 +30,11 @@ describe("Reader request normalization", () => {
   });
 
   it("accepts the real edit token without Authorization and rejects a placeholder alone", async () => {
-    const feedId = await ensureSubscription(env.DB, "https://token-auth.example/feed.xml", Date.now());
+    const feedId = await ensureSubscription(
+      env.DB,
+      "https://token-auth.example/feed.xml",
+      Date.now(),
+    );
 
     const authorized = await fetchReader(
       `subscription/edit?T=test-reader-token&a=${encodeURIComponent("user/1/label/Query")}`,
@@ -70,7 +74,11 @@ describe("Reader request normalization", () => {
   });
 
   it("lets form singleton values override query values while valid auth tolerates T=x", async () => {
-    const feedId = await ensureSubscription(env.DB, "https://override.example/feed.xml", Date.now());
+    const feedId = await ensureSubscription(
+      env.DB,
+      "https://override.example/feed.xml",
+      Date.now(),
+    );
 
     const response = await fetchReader(
       `subscription/edit?T=x&s=feed%2F${feedId}&ac=unsubscribe&t=QueryTitle`,
