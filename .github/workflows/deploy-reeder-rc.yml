@@ -1,0 +1,59 @@
+name: Deploy Reeder RC
+
+on:
+  push:
+    branches:
+      - ops/deploy-reeder-rc
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 8bb496011403552e785ea1b834daffdf
+      CF_TOKEN_PRIMARY: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_TOKEN_FALLBACK: ${{ secrets.CF_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Select Cloudflare API token
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${CF_TOKEN_PRIMARY}" ]; then
+            echo "CLOUDFLARE_API_TOKEN=${CF_TOKEN_PRIMARY}" >> "${GITHUB_ENV}"
+          elif [ -n "${CF_TOKEN_FALLBACK}" ]; then
+            echo "CLOUDFLARE_API_TOKEN=${CF_TOKEN_FALLBACK}" >> "${GITHUB_ENV}"
+          else
+            echo "::error::No CLOUDFLARE_API_TOKEN or CF_API_TOKEN repository secret is configured."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps --no-audit --no-fund
+
+      - name: Verify release candidate
+        run: npm run check
+
+      - name: Enable sanitized Reeder trace for release gate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("wrangler.jsonc")
+          s = p.read_text()
+          old = '"REEDER_TRACE": "0"'
+          new = '"REEDER_TRACE": "1"'
+          if old not in s:
+              raise SystemExit("expected REEDER_TRACE=0 in wrangler.jsonc")
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Deploy release candidate
+        run: npx wrangler deploy
