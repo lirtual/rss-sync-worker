@@ -33,6 +33,8 @@ export const parseItemId = (value: string): number | null => {
   } else if (/^0x[0-9a-f]+$/iu.test(candidate)) {
     candidate = candidate.slice(2);
     radix = 16;
+  } else if (/^[0-9a-f]{16}$/iu.test(candidate)) {
+    radix = 16;
   } else if (/^[0-9a-f]*[a-f][0-9a-f]*$/iu.test(candidate)) {
     radix = 16;
   }
