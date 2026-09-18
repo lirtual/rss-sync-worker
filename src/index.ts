@@ -254,9 +254,16 @@ app.post("/api/reader/accounts/ClientLogin", async (context) => {
     safeEqual(password, readerToken(context.env)),
   ]);
 
-  if (!usernameMatches || !passwordMatches) return textResponse("Error=BadAuthentication\n", 403);
+  if (!usernameMatches || !passwordMatches) {
+    return context.json({ error_message: "access unauthorized" }, 401, jsonHeaders);
+  }
+
   const credential = readerToken(context.env);
-  return textResponse(`SID=${credential}\nLSID=${credential}\nAuth=${credential}\n`);
+  const loginResult = { SID: credential, LSID: credential, Auth: credential };
+  if (form.get("output") === "json") return context.json(loginResult, 200, jsonHeaders);
+  return textResponse(
+    "SID=" + credential + "\nLSID=" + credential + "\nAuth=" + credential + "\n",
+  );
 });
 
 app.use(`${readerRoot}/*`, requireReader);
