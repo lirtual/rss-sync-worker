@@ -30,9 +30,12 @@ const getIds = async (query: string) => {
   if (!params.has("s")) params.set("s", "user/-/state/com.google/reading-list");
   params.set("output", "json");
   const response = await exports.default.fetch(
-    new Request(`https://rss-sync.test/api/reader/reader/api/0/stream/items/ids?${params.toString()}`, {
-      headers: readerHeaders,
-    }),
+    new Request(
+      `https://rss-sync.test/api/reader/reader/api/0/stream/items/ids?${params.toString()}`,
+      {
+        headers: readerHeaders,
+      },
+    ),
   );
   const body = (await response.json()) as {
     itemRefs?: Array<{ id: string }>;
