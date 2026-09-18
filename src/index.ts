@@ -16,6 +16,7 @@ import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./r
 import { mutateEntryStates } from "./state-store";
 import { ensureSubscription, listSubscriptions } from "./store";
 import { findReaderEntries, listStreamItemIds, type StreamFilter } from "./stream-store";
+import { listUnreadCounts } from "./unread-store";
 
 type AppBindings = {
   Bindings: Env;
@@ -397,37 +398,8 @@ app.post(`${readerRoot}/disable-tag`, async (context) => {
 });
 
 app.get(`${readerRoot}/unread-count`, async (context) => {
-  const [globalResult, feedResult, folderResult] = await Promise.all([
-    context.env.DB.prepare(
-      "SELECT SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM entries e JOIN subscriptions s ON s.feed_id = e.feed_id AND s.active = 1 JOIN entry_states es ON es.entry_id = e.id",
-    ).first<{ count: number | null; newest: number | null }>(),
-    context.env.DB.prepare(
-      "SELECT f.id AS feedId, SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM feeds f JOIN subscriptions s ON s.feed_id = f.id AND s.active = 1 LEFT JOIN entries e ON e.feed_id = f.id LEFT JOIN entry_states es ON es.entry_id = e.id GROUP BY f.id ORDER BY f.id",
-    ).all<{ feedId: number; count: number | null; newest: number | null }>(),
-    context.env.DB.prepare(
-      "SELECT folder.name AS folderName, SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM folders folder JOIN subscription_folders sf ON sf.folder_id = folder.id JOIN subscriptions s ON s.feed_id = sf.feed_id AND s.active = 1 LEFT JOIN entries e ON e.feed_id = s.feed_id LEFT JOIN entry_states es ON es.entry_id = e.id GROUP BY folder.id, folder.name ORDER BY folder.name",
-    ).all<{ folderName: string; count: number | null; newest: number | null }>(),
-  ]);
-
-  const unreadcounts: Array<{ id: string; count: number; newestItemTimestampUsec: string }> = [];
-  const appendCount = (
-    id: string,
-    row: { count?: number | null; newest?: number | null } | null,
-  ): void => {
-    const count = Number(row?.count ?? 0);
-    const newest = Number(row?.newest ?? 0);
-    unreadcounts.push({
-      id,
-      count,
-      newestItemTimestampUsec: String(Math.max(0, newest) * 1_000),
-    });
-  };
-
-  appendCount(readingListStream, globalResult);
-  for (const row of feedResult.results) appendCount(`feed/${row.feedId}`, row);
-  for (const row of folderResult.results) appendCount(labelId(row.folderName), row);
-
-  return context.json({ max: Number(globalResult?.count ?? 0), unreadcounts }, 200, jsonHeaders);
+  const unreadcounts = await listUnreadCounts(context.env.DB, readingListStream, labelId);
+  return context.json({ max: unreadcounts[0]?.count ?? 0, unreadcounts }, 200, jsonHeaders);
 });
 
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
