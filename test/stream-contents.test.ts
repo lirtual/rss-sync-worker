@@ -58,9 +58,11 @@ const setup = async () => {
   const folder = await exports.default.fetch(
     new Request(`${root}/subscription/edit`, {
       method: "POST",
-      headers: { ...auth, "content-type": "application/x-www-form-urlencoded" },
+      headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams([
+        ["T", "test-reader-token"],
         ["s", `feed/${feedId}`],
+        ["ac", "edit"],
         ["a", "user/-/label/Direct"],
       ]),
     }),
@@ -71,7 +73,9 @@ const setup = async () => {
 };
 
 const itemIds = async (query: string) => {
-  const response = await fetchReader(`stream/items/ids?${query}`);
+  const params = new URLSearchParams(query);
+  params.set("output", "json");
+  const response = await fetchReader(`stream/items/ids?${params.toString()}`);
   expect(response.status).toBe(200);
   return (await response.json()) as {
     itemRefs: Array<{ id: string }>;
@@ -144,7 +148,7 @@ describe("Reeder direct stream contents", () => {
 
   it("rejects unsupported exclusion streams explicitly", async () => {
     const response = await fetchReader(
-      `stream/items/ids?xt=${encodeURIComponent("user/-/label/unsupported")}`,
+      `stream/items/ids?output=json&s=${encodeURIComponent("user/-/state/com.google/reading-list")}&xt=${encodeURIComponent("user/-/label/unsupported")}`,
     );
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "UnsupportedFilter" });
