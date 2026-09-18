@@ -283,15 +283,14 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
 
     const now = Date.now();
     const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
-    const meta = await context.env.DB
-      .prepare(
-        `SELECT f.canonical_feed_url AS feedUrl,
-                f.title AS feedTitle,
-                s.custom_title AS customTitle
-         FROM feeds f
-         JOIN subscriptions s ON s.feed_id = f.id
-         WHERE f.id = ?`,
-      )
+    const meta = await context.env.DB.prepare(
+      `SELECT f.canonical_feed_url AS feedUrl,
+              f.title AS feedTitle,
+              s.custom_title AS customTitle
+       FROM feeds f
+       JOIN subscriptions s ON s.feed_id = f.id
+       WHERE f.id = ?`,
+    )
       .bind(feedId)
       .first<{ feedUrl: string; feedTitle: string | null; customTitle: string | null }>();
     await enqueueFeedRefresh(context.env, feedId, now);
@@ -565,8 +564,7 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
   const entries = await findReaderEntries(context.env.DB, ids);
   const direction = form.get("r") === "o" ? 1 : -1;
   entries.sort(
-    (left, right) =>
-      direction * ((left.ingestedAt - right.ingestedAt) || (left.id - right.id)),
+    (left, right) => direction * (left.ingestedAt - right.ingestedAt || left.id - right.id),
   );
 
   return context.json(
@@ -576,10 +574,8 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
       title: "Reading List",
       self: [
         {
-          href: new URL(
-            `${readerRoot}/stream/items/contents`,
-            new URL(context.req.url).origin,
-          ).href,
+          href: new URL(`${readerRoot}/stream/items/contents`, new URL(context.req.url).origin)
+            .href,
         },
       ],
       author: readerUsername(context.env),
