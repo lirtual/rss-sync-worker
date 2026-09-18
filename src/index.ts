@@ -287,28 +287,44 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
   try {
     const form = context.get("readerParams");
     const requestedUrl = form.get("quickadd") ?? "";
-    if (requestedUrl.trim() === "") return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+    if (requestedUrl.trim() === "") {
+      return context.json({ error_message: "invalid URL" }, 400, jsonHeaders);
+    }
 
     const now = Date.now();
     const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
+    const meta = await context.env.DB
+      .prepare(
+        `SELECT f.canonical_feed_url AS feedUrl,
+                f.title AS feedTitle,
+                s.custom_title AS customTitle
+         FROM feeds f
+         JOIN subscriptions s ON s.feed_id = f.id
+         WHERE f.id = ?`,
+      )
+      .bind(feedId)
+      .first<{ feedUrl: string; feedTitle: string | null; customTitle: string | null }>();
     await enqueueFeedRefresh(context.env, feedId, now);
+
+    const canonicalUrl = meta?.feedUrl ?? requestedUrl;
+    const streamName = meta?.customTitle?.trim() || meta?.feedTitle?.trim() || canonicalUrl;
     return context.json(
-      { numResults: 1, query: requestedUrl, streamId: `feed/${feedId}`, streamName: "" },
+      { numResults: 1, query: canonicalUrl, streamId: "feed/" + feedId, streamName },
       200,
       jsonHeaders,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "subscription failed";
     const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
-    return context.json(
-      { error: status === 400 ? "BadRequest" : "ServiceUnavailable" },
-      status,
-      jsonHeaders,
-    );
+    return context.json({ error_message: message }, status, jsonHeaders);
   }
 });
 
 app.get(`${readerRoot}/subscription/list`, async (context) => {
+  if (context.get("readerParams").get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const [subscriptions, memberships] = await Promise.all([
     listSubscriptions(context.env.DB),
     listSubscriptionFolders(context.env.DB),
@@ -338,41 +354,84 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
 
 app.post(`${readerRoot}/subscription/edit`, async (context) => {
   const form = context.get("readerParams");
-  const action = form.get("ac") ?? "edit";
+  const action = form.get("ac") ?? "";
+  const streams = form.getAll("s");
+  if (streams.length === 0) {
+    return context.json({ error_message: "no valid stream IDs provided" }, 400, jsonHeaders);
+  }
+
   const now = Date.now();
-  const streamValue = form.get("s") ?? "";
-  let feedId = parseFeedStream(normalizeReaderStream(streamValue));
-  if (feedId === null && action === "subscribe" && streamValue.startsWith("feed/")) {
+  const title = form.get("t") ?? "";
+  const label = form.has("a") ? parseLabelName(form.get("a")) : null;
+  if (form.has("a") && label === null) {
+    return context.json({ error_message: "destination must be a label" }, 400, jsonHeaders);
+  }
+  if (form.has("r")) {
+    return context.json(
+      { error_message: "removing subscription labels is not supported" },
+      400,
+      jsonHeaders,
+    );
+  }
+
+  if (action === "subscribe") {
+    const stream = streams[0] ?? "";
+    if (!stream.startsWith("feed/")) {
+      return context.json({ error_message: "invalid feed stream" }, 400, jsonHeaders);
+    }
     try {
-      feedId = await ensureSubscription(context.env.DB, streamValue.slice("feed/".length), now);
+      const feedId = await ensureSubscription(context.env.DB, stream.slice("feed/".length), now);
+      if (title !== "") await updateSubscription(context.env.DB, feedId, { title }, now);
+      if (label !== null) await replaceFolderMembership(context.env.DB, feedId, label, now);
       await enqueueFeedRefresh(context.env, feedId, now);
-    } catch {
-      return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
+      return textResponse("OK");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "subscription failed";
+      return context.json({ error_message: message }, 400, jsonHeaders);
     }
   }
-  if (feedId === null) return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
-  const active = action === "subscribe" ? true : action === "unsubscribe" ? false : undefined;
-  if (action !== "edit" && active === undefined) {
-    return context.json({ error: "BadAction" }, 400, jsonHeaders);
+
+  if (action === "unsubscribe") {
+    const feedIds = streams.map((stream) => parseFeedStream(normalizeReaderStream(stream)));
+    if (feedIds.some((feedId) => feedId === null)) {
+      return context.json({ error_message: "invalid feed stream" }, 400, jsonHeaders);
+    }
+    for (const feedId of feedIds) {
+      const exists = await updateSubscription(
+        context.env.DB,
+        feedId as number,
+        { active: false },
+        now,
+      );
+      if (!exists) return context.json({ error_message: "feed not found" }, 404, jsonHeaders);
+    }
+    return textResponse("OK");
   }
 
-  const title = form.has("t") ? form.get("t") : undefined;
-  const exists = await updateSubscription(context.env.DB, feedId, { active, title }, now);
-  if (!exists) return context.json({ error: "UnknownSubscription" }, 404, jsonHeaders);
-
-  for (const value of form.getAll("a")) {
-    const name = parseLabelName(value);
-    if (name !== null) await addFolderMembership(context.env.DB, feedId, name, now);
+  if (action === "edit") {
+    const feedId = parseFeedStream(normalizeReaderStream(streams[0] ?? ""));
+    if (feedId === null) {
+      return context.json({ error_message: "invalid feed stream" }, 400, jsonHeaders);
+    }
+    const exists = await updateSubscription(
+      context.env.DB,
+      feedId,
+      { title: form.has("t") ? title : undefined },
+      now,
+    );
+    if (!exists) return context.json({ error_message: "feed not found" }, 404, jsonHeaders);
+    if (label !== null) await replaceFolderMembership(context.env.DB, feedId, label, now);
+    return textResponse("OK");
   }
-  for (const value of form.getAll("r")) {
-    const name = parseLabelName(value);
-    if (name !== null) await removeFolderMembership(context.env.DB, feedId, name);
-  }
 
-  return textResponse("OK\n");
+  return context.json({ error_message: "unrecognized action " + action }, 400, jsonHeaders);
 });
 
 app.get(`${readerRoot}/tag/list`, async (context) => {
+  if (context.get("readerParams").get("output") !== "json") {
+    return context.json({ error_message: "only json output is supported" }, 400, jsonHeaders);
+  }
+
   const folders = await listFolders(context.env.DB);
   return context.json(
     {
@@ -395,18 +454,28 @@ app.post(`${readerRoot}/rename-tag`, async (context) => {
   const source = parseLabelName(form.get("s"));
   const destination = parseLabelName(form.get("dest"));
   if (source === null || destination === null) {
-    return context.json({ error: "BadTag" }, 400, jsonHeaders);
+    return context.json({ error_message: "invalid label" }, 400, jsonHeaders);
+  }
+  if ((await findFolderByName(context.env.DB, source)) === null) {
+    return context.json({ error_message: "label not found" }, 404, jsonHeaders);
   }
   await renameFolder(context.env.DB, source, destination, Date.now());
-  return textResponse("OK\n");
+  return textResponse("OK");
 });
 
 app.post(`${readerRoot}/disable-tag`, async (context) => {
   const form = context.get("readerParams");
-  const name = parseLabelName(form.get("s"));
-  if (name === null) return context.json({ error: "BadTag" }, 400, jsonHeaders);
-  await deleteFolder(context.env.DB, name);
-  return textResponse("OK\n");
+  const names = form.getAll("s").map((value) => parseLabelName(value));
+  if (names.length === 0 || names.some((name) => name === null)) {
+    return context.json({ error_message: "only labels are supported" }, 400, jsonHeaders);
+  }
+  try {
+    await deleteFoldersAndReassign(context.env.DB, names as string[]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "tag deletion failed";
+    return context.json({ error_message: message }, 400, jsonHeaders);
+  }
+  return textResponse("OK");
 });
 
 app.get(`${readerRoot}/unread-count`, async (context) => {
