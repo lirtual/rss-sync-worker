@@ -27,7 +27,7 @@ describe("worker foundation", () => {
       }),
     });
 
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(401);
     expect(await response.text()).toBe("Error=BadAuthentication\n");
   });
 
