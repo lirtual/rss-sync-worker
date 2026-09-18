@@ -27,11 +27,7 @@ const edit = (values: Array<[string, string]>) =>
     new Request(`${root}/subscription/edit`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams([
-        ["T", "test-reader-token"],
-        ["ac", "edit"],
-        ...values,
-      ]),
+      body: new URLSearchParams([["T", "test-reader-token"], ["ac", "edit"], ...values]),
     }),
   );
 
