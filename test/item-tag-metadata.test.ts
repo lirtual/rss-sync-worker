@@ -23,11 +23,17 @@ const fetchReader = (path: string, init?: RequestInit) =>
   );
 
 const edit = (values: Array<[string, string]>) =>
-  fetchReader("subscription/edit", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(values),
-  });
+  exports.default.fetch(
+    new Request(`${root}/subscription/edit`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams([
+        ["T", "test-reader-token"],
+        ["ac", "edit"],
+        ...values,
+      ]),
+    }),
+  );
 
 describe("Reeder item and tag metadata", () => {
   it("exposes feed site URL and current folder memberships on article items", async () => {
@@ -51,7 +57,6 @@ describe("Reeder item and tag metadata", () => {
         await edit([
           ["s", `feed/${feedId}`],
           ["a", "user/-/label/Engineering"],
-          ["a", "user/1/label/Reading"],
         ])
       ).status,
     ).toBe(200);
@@ -77,7 +82,6 @@ describe("Reeder item and tag metadata", () => {
         "user/-/state/com.google/reading-list",
         "user/-/state/com.google/read",
         "user/-/label/Engineering",
-        "user/-/label/Reading",
       ]),
     );
 
@@ -85,7 +89,7 @@ describe("Reeder item and tag metadata", () => {
       (
         await edit([
           ["s", `feed/${feedId}`],
-          ["r", "user/-/label/Reading"],
+          ["a", "user/1/label/Reading"],
         ])
       ).status,
     ).toBe(200);
@@ -94,20 +98,24 @@ describe("Reeder item and tag metadata", () => {
       `stream/contents/${encodeURIComponent(`feed/${feedId}`)}?n=10`,
     );
     const updatedBody = (await updated.json()) as { items: Array<{ categories: string[] }> };
-    expect(updatedBody.items[0]?.categories).toContain("user/-/label/Engineering");
-    expect(updatedBody.items[0]?.categories).not.toContain("user/-/label/Reading");
+    expect(updatedBody.items[0]?.categories).toContain("user/-/label/Reading");
+    expect(updatedBody.items[0]?.categories).not.toContain("user/-/label/Engineering");
   });
 
   it("returns starred plus complete folder metadata from tag/list", async () => {
     const now = Date.now();
-    const feedId = await ensureSubscription(env.DB, "https://tag-meta.example/feed.xml", now);
+    const alpha = await ensureSubscription(env.DB, "https://tag-meta-alpha.example/feed.xml", now);
+    const beta = await ensureSubscription(env.DB, "https://tag-meta-beta.example/feed.xml", now);
     await edit([
-      ["s", `feed/${feedId}`],
+      ["s", `feed/${alpha}`],
       ["a", "user/-/label/Alpha"],
+    ]);
+    await edit([
+      ["s", `feed/${beta}`],
       ["a", "user/-/label/Beta"],
     ]);
 
-    const response = await fetchReader("tag/list");
+    const response = await fetchReader("tag/list?output=json");
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       tags: Array<{ id: string; label?: string; type?: string }>;
