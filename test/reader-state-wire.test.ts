@@ -5,7 +5,6 @@ import { claimDispatch, ensureSubscription } from "../src/store";
 
 const root = "https://rss-sync.test/api/reader/reader/api/0";
 const headers = {
-  Authorization: "GoogleLogin auth=test-reader-token",
   "content-type": "application/x-www-form-urlencoded",
 };
 
@@ -14,7 +13,7 @@ const post = (path: string, values: Array<[string, string]>) =>
     new Request(`${root}/${path}`, {
       method: "POST",
       headers,
-      body: new URLSearchParams(values),
+      body: new URLSearchParams([["T", "test-reader-token"], ...values]),
     }),
   );
 
@@ -140,6 +139,6 @@ describe("Reader-state wire semantics", () => {
       ["ts", ts],
     ]);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: "BadTimestamp" });
+    expect(await response.json()).toEqual({ error_message: "invalid timestamp" });
   });
 });
