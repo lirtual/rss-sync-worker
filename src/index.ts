@@ -101,8 +101,7 @@ const parseFeedStream = (stream: string): number | null => {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
 
-const normalizeReaderStream = (value: string): string =>
-  value.replace(/^user\/\d+\//u, "user/-/");
+const normalizeReaderStream = (value: string): string => value.replace(/^user\/\d+\//u, "user/-/");
 
 const parseLabelName = (value: string | null): string | null => {
   if (value === null) return null;
@@ -263,7 +262,11 @@ app.get(`${readerRoot}/tag/list`, async (context) => {
     {
       tags: [
         { id: starredStream },
-        ...folders.map((folder) => ({ id: labelId(folder.name), label: folder.name, type: "folder" })),
+        ...folders.map((folder) => ({
+          id: labelId(folder.name),
+          label: folder.name,
+          type: "folder",
+        })),
       ],
     },
     200,
@@ -321,11 +324,7 @@ app.get(`${readerRoot}/unread-count`, async (context) => {
   for (const row of feedResult.results) appendCount(`feed/${row.feedId}`, row);
   for (const row of folderResult.results) appendCount(labelId(row.folderName), row);
 
-  return context.json(
-    { max: Number(globalResult?.count ?? 0), unreadcounts },
-    200,
-    jsonHeaders,
-  );
+  return context.json({ max: Number(globalResult?.count ?? 0), unreadcounts }, 200, jsonHeaders);
 });
 
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
@@ -426,10 +425,8 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
       title: "Reading List",
       self: [
         {
-          href: new URL(
-            `${readerRoot}/stream/items/contents`,
-            new URL(context.req.url).origin,
-          ).href,
+          href: new URL(`${readerRoot}/stream/items/contents`, new URL(context.req.url).origin)
+            .href,
         },
       ],
       author: readerUsername(context.env),
