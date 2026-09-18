@@ -4,6 +4,8 @@ export interface ReaderEntry {
   id: number;
   feedId: number;
   feedTitle: string;
+  feedSiteUrl: string | null;
+  folderNames: string[];
   title: string;
   url: string | null;
   author: string | null;
@@ -82,6 +84,7 @@ export const googleEntry = (entry: ReaderEntry) => {
   const categories = ["user/-/state/com.google/reading-list"];
   if (entry.isRead === 1) categories.push("user/-/state/com.google/read");
   if (entry.isStarred === 1) categories.push("user/-/state/com.google/starred");
+  for (const folderName of entry.folderNames) categories.push(`user/-/label/${folderName}`);
 
   const publishedAt = entry.publishedAt ?? entry.ingestedAt;
   const alternate = entry.url === null ? [] : [{ href: entry.url, type: "text/html" }];
@@ -98,7 +101,13 @@ export const googleEntry = (entry: ReaderEntry) => {
     canonical,
     content: { direction: "ltr", content: entry.contentHtml },
     summary: { direction: "ltr", content: entry.contentHtml },
-    origin: { streamId: `feed/${entry.feedId}`, title: entry.feedTitle },
+    origin: {
+      streamId: `feed/${entry.feedId}`,
+      title: entry.feedTitle,
+      ...(entry.feedSiteUrl === null || entry.feedSiteUrl === ""
+        ? {}
+        : { htmlUrl: entry.feedSiteUrl }),
+    },
     categories,
     ...(entry.author === null || entry.author === "" ? {} : { author: entry.author }),
   };
