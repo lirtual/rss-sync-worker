@@ -78,25 +78,27 @@ const parseRss = (root: Record<string, unknown>): ParsedFeed | null => {
   const channel = asRecord(rss?.channel);
   if (channel === null) return null;
 
-  const entries = asArray(channel.item).map((raw): ParsedEntry => {
-    const item = asRecord(raw) ?? {};
-    const sourceId = text(item.guid) || null;
-    const url = text(item.link) || null;
-    const title = text(item.title);
-    const author = text(item.author) || text(item["dc:creator"]) || null;
-    const publishedAt = dateMs(item.pubDate ?? item["dc:date"]);
-    const sourceUpdatedAt = dateMs(item.updated ?? item["atom:updated"]);
-    const contentHtml = text(item["content:encoded"]) || text(item.description);
-    return {
-      sourceId,
-      title,
-      url,
-      author,
-      publishedAt,
-      sourceUpdatedAt,
-      contentHtml,
-    };
-  });
+  const entries = asArray(channel.item)
+    .slice(0, MAX_PARSED_ENTRIES)
+    .map((raw): ParsedEntry => {
+      const item = asRecord(raw) ?? {};
+      const sourceId = text(item.guid) || null;
+      const url = text(item.link) || null;
+      const title = text(item.title);
+      const author = text(item.author) || text(item["dc:creator"]) || null;
+      const publishedAt = dateMs(item.pubDate ?? item["dc:date"]);
+      const sourceUpdatedAt = dateMs(item.updated ?? item["atom:updated"]);
+      const contentHtml = text(item["content:encoded"]) || text(item.description);
+      return {
+        sourceId,
+        title,
+        url,
+        author,
+        publishedAt,
+        sourceUpdatedAt,
+        contentHtml,
+      };
+    });
 
   return {
     title: text(channel.title) || "Untitled feed",
@@ -109,25 +111,27 @@ const parseAtom = (root: Record<string, unknown>): ParsedFeed | null => {
   const feed = asRecord(root.feed);
   if (feed === null) return null;
 
-  const entries = asArray(feed.entry).map((raw): ParsedEntry => {
-    const entry = asRecord(raw) ?? {};
-    const sourceId = text(entry.id) || null;
-    const url = atomLink(entry.link);
-    const title = text(entry.title);
-    const author = atomAuthor(entry.author);
-    const publishedAt = dateMs(entry.published ?? entry.updated);
-    const sourceUpdatedAt = dateMs(entry.updated);
-    const contentHtml = text(entry.content) || text(entry.summary);
-    return {
-      sourceId,
-      title,
-      url,
-      author,
-      publishedAt,
-      sourceUpdatedAt,
-      contentHtml,
-    };
-  });
+  const entries = asArray(feed.entry)
+    .slice(0, MAX_PARSED_ENTRIES)
+    .map((raw): ParsedEntry => {
+      const entry = asRecord(raw) ?? {};
+      const sourceId = text(entry.id) || null;
+      const url = atomLink(entry.link);
+      const title = text(entry.title);
+      const author = atomAuthor(entry.author);
+      const publishedAt = dateMs(entry.published ?? entry.updated);
+      const sourceUpdatedAt = dateMs(entry.updated);
+      const contentHtml = text(entry.content) || text(entry.summary);
+      return {
+        sourceId,
+        title,
+        url,
+        author,
+        publishedAt,
+        sourceUpdatedAt,
+        contentHtml,
+      };
+    });
 
   return {
     title: text(feed.title) || "Untitled feed",
@@ -136,12 +140,7 @@ const parseAtom = (root: Record<string, unknown>): ParsedFeed | null => {
   };
 };
 
-const bounded = (feed: ParsedFeed): ParsedFeed => {
-  if (feed.entries.length > MAX_PARSED_ENTRIES) {
-    throw new Error(`feed contains more than ${MAX_PARSED_ENTRIES} entries`);
-  }
-  return feed;
-};
+const bounded = (feed: ParsedFeed): ParsedFeed => feed;
 
 export const parseFeed = (xml: string): ParsedFeed => {
   if (/<!DOCTYPE|<!ENTITY/iu.test(xml)) {

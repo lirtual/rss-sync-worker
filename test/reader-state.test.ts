@@ -70,7 +70,7 @@ const editTag = async (id: number, fields: Record<string, string>): Promise<Resp
     new Request(`${root}/edit-tag`, {
       method: "POST",
       headers: readerHeaders,
-      body: new URLSearchParams({ i: String(id), ...fields }),
+      body: new URLSearchParams({ T: "test-reader-token", i: String(id), ...fields }),
     }),
   );
 
@@ -86,9 +86,15 @@ const state = async (id: number): Promise<{ isRead: number; isStarred: number }>
 
 const streamIds = async (query: URLSearchParams): Promise<number[]> => {
   const response = await exports.default.fetch(
-    new Request(`${root}/stream/items/ids?${query.toString()}`, {
-      headers: { Authorization: readerHeaders.Authorization },
-    }),
+    new Request(
+      `${root}/stream/items/ids?${new URLSearchParams([
+        ["output", "json"],
+        ...query.entries(),
+      ]).toString()}`,
+      {
+        headers: { Authorization: readerHeaders.Authorization },
+      },
+    ),
   );
   expect(response.status).toBe(200);
   const payload = (await response.json()) as { itemRefs: Array<{ id: string }> };

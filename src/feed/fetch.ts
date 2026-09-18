@@ -1,6 +1,6 @@
 const MAX_REDIRECTS = 5;
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 15_000;
+const MAX_BODY_BYTES = 8 * 1024 * 1024;
+const FETCH_TIMEOUT_MS = 30_000;
 
 export class FeedFetchError extends Error {
   constructor(
@@ -99,14 +99,15 @@ export const assertSafeFeedUrl = (input: string | URL): URL => {
 const readBodyLimited = async (response: Response): Promise<string> => {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null && Number(contentLength) > MAX_BODY_BYTES) {
-    throw new FeedFetchError("response_too_large", "feed response exceeds 4 MiB limit");
+    await response.body?.cancel();
+    throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
   }
   if (response.body === null) return "";
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let total = 0;
-  let body = "";
+  const chunks: string[] = [];
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -114,12 +115,12 @@ const readBodyLimited = async (response: Response): Promise<string> => {
       total += value.byteLength;
       if (total > MAX_BODY_BYTES) {
         await reader.cancel();
-        throw new FeedFetchError("response_too_large", "feed response exceeds 4 MiB limit");
+        throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
       }
-      body += decoder.decode(value, { stream: true });
+      chunks.push(decoder.decode(value, { stream: true }));
     }
-    body += decoder.decode();
-    return body;
+    chunks.push(decoder.decode());
+    return chunks.join("");
   } finally {
     reader.releaseLock();
   }
@@ -136,7 +137,7 @@ const fetchWithTimeout = async (
     return await fetcher(url, { ...init, signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new FeedFetchError("timeout", "feed request exceeded 15 second timeout");
+      throw new FeedFetchError("timeout", "feed request exceeded 30 second timeout");
     }
     throw error;
   } finally {
@@ -175,6 +176,7 @@ export const fetchFeedDocument = async (
         permanentOnly = false;
       }
       current = assertSafeFeedUrl(new URL(location, current));
+      await response.body?.cancel();
       continue;
     }
 
@@ -193,6 +195,7 @@ export const fetchFeedDocument = async (
     }
 
     if (!response.ok) {
+      await response.body?.cancel();
       throw new FeedFetchError("http_error", `feed returned HTTP ${response.status}`);
     }
 

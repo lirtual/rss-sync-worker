@@ -12,6 +12,14 @@ const rss = (guid: string) => `<?xml version="1.0"?>
 const ok = (body: string, headers: HeadersInit = {}): Response =>
   new Response(body, { status: 200, headers });
 
+const manyItemRss = (count: number) => {
+  const items = Array.from({ length: count }, (_, index) => {
+    const id = index + 1;
+    return `<item><guid>many-${id}</guid><title>Many ${id}</title><link>https://many.example/${id}</link><description><![CDATA[<p>Body ${id}</p>]]></description></item>`;
+  }).join("");
+  return `<?xml version="1.0"?><rss version="2.0"><channel><title>Many</title><link>https://many.example/</link>${items}</channel></rss>`;
+};
+
 describe("safe feed retrieval", () => {
   it("rejects obvious private and metadata targets before fetch", () => {
     for (const value of [
@@ -171,6 +179,60 @@ describe("refresh recovery and redirect persistence", () => {
       .first<{ feedId: number }>();
     expect(alias?.feedId).toBe(feedId);
     expect(await ensureSubscription(env.DB, oldUrl, now + 40)).toBe(feedId);
+  });
+
+  it("bounds large feed ingestion at 250 entries instead of failing", async () => {
+    const now = 1_820_250_000_000;
+    const feedId = await ensureSubscription(env.DB, "https://many.example/feed.xml", now);
+    const message = await claimDispatch(env.DB, feedId, now);
+    if (message === null) throw new Error("expected dispatch");
+
+    expect(
+      await processRefreshMessage(env, message, now + 1, async () => ok(manyItemRss(300))),
+    ).toBe("processed");
+
+    const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM entries WHERE feed_id = ?")
+      .bind(feedId)
+      .first<{ count: number }>();
+    expect(count?.count).toBe(250);
+  });
+
+  it("does not rewrite unchanged entry metadata or content on repeated 200 responses", async () => {
+    const now = 1_820_275_000_000;
+    const feedId = await ensureSubscription(env.DB, "https://stable-write.example/feed.xml", now);
+    const body = manyItemRss(1);
+
+    const first = await claimDispatch(env.DB, feedId, now);
+    if (first === null) throw new Error("expected dispatch");
+    expect(await processRefreshMessage(env, first, now + 1, async () => ok(body))).toBe(
+      "processed",
+    );
+
+    const before = await env.DB.prepare(
+      `SELECT e.updated_at AS entryUpdatedAt, ec.updated_at AS contentUpdatedAt
+       FROM entries e
+       LEFT JOIN entry_contents ec ON ec.entry_id = e.id
+       WHERE e.feed_id = ?`,
+    )
+      .bind(feedId)
+      .first<{ entryUpdatedAt: number; contentUpdatedAt: number | null }>();
+
+    const second = await claimDispatch(env.DB, feedId, now + 2);
+    if (second === null) throw new Error("expected second dispatch");
+    expect(await processRefreshMessage(env, second, now + 3, async () => ok(body))).toBe(
+      "processed",
+    );
+
+    const after = await env.DB.prepare(
+      `SELECT e.updated_at AS entryUpdatedAt, ec.updated_at AS contentUpdatedAt
+       FROM entries e
+       LEFT JOIN entry_contents ec ON ec.entry_id = e.id
+       WHERE e.feed_id = ?`,
+    )
+      .bind(feedId)
+      .first<{ entryUpdatedAt: number; contentUpdatedAt: number | null }>();
+
+    expect(after).toEqual(before);
   });
 
   it("does not delete local history when a source drops old items", async () => {

@@ -4,6 +4,8 @@ export interface ReaderEntry {
   id: number;
   feedId: number;
   feedTitle: string;
+  feedSiteUrl: string | null;
+  folderNames: string[];
   title: string;
   url: string | null;
   author: string | null;
@@ -30,6 +32,8 @@ export const parseItemId = (value: string): number | null => {
     radix = 16;
   } else if (/^0x[0-9a-f]+$/iu.test(candidate)) {
     candidate = candidate.slice(2);
+    radix = 16;
+  } else if (/^[0-9a-f]{16}$/iu.test(candidate)) {
     radix = 16;
   } else if (/^[0-9a-f]*[a-f][0-9a-f]*$/iu.test(candidate)) {
     radix = 16;
@@ -79,9 +83,10 @@ export const decodeContinuation = (value: string | null): StreamCursor | null =>
 };
 
 export const googleEntry = (entry: ReaderEntry) => {
-  const categories = ["user/1/state/com.google/reading-list"];
-  if (entry.isRead === 1) categories.push("user/1/state/com.google/read");
-  if (entry.isStarred === 1) categories.push("user/1/state/com.google/starred");
+  const categories = ["user/-/state/com.google/reading-list"];
+  if (entry.isRead === 1) categories.push("user/-/state/com.google/read");
+  if (entry.isStarred === 1) categories.push("user/-/state/com.google/starred");
+  for (const folderName of entry.folderNames) categories.push(`user/-/label/${folderName}`);
 
   const publishedAt = entry.publishedAt ?? entry.ingestedAt;
   const alternate = entry.url === null ? [] : [{ href: entry.url, type: "text/html" }];
@@ -97,7 +102,14 @@ export const googleEntry = (entry: ReaderEntry) => {
     alternate,
     canonical,
     content: { direction: "ltr", content: entry.contentHtml },
-    origin: { streamId: `feed/${entry.feedId}`, title: entry.feedTitle },
+    summary: { direction: "ltr", content: entry.contentHtml },
+    origin: {
+      streamId: `feed/${entry.feedId}`,
+      title: entry.feedTitle,
+      ...(entry.feedSiteUrl === null || entry.feedSiteUrl === ""
+        ? {}
+        : { htmlUrl: entry.feedSiteUrl }),
+    },
     categories,
     ...(entry.author === null || entry.author === "" ? {} : { author: entry.author }),
   };

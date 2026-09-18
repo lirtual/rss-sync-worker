@@ -204,113 +204,6 @@ export const loadDispatchedFeed = async (
     .bind(message.feedId, message.dispatchToken)
     .first<DispatchedFeed>();
 
-const upsertEntry = async (
-  db: D1Database,
-  feed: DispatchedFeed,
-  parsed: ParsedEntry,
-  bootstrapRead: boolean,
-  now: number,
-): Promise<boolean> => {
-  const key = await identityKey(parsed, feed.canonicalFeedUrl);
-  const url = canonicalizeEntryUrl(parsed.url, feed.canonicalFeedUrl);
-  const bytes = new TextEncoder().encode(parsed.contentHtml).byteLength;
-  const contentStatus =
-    bytes === 0 ? "empty" : bytes > MAX_ENTRY_CONTENT_BYTES ? "oversized" : "stored";
-
-  const inserted = await db
-    .prepare(
-      `INSERT INTO entries (
-        feed_id, identity_key, source_id, title, url, author, published_at,
-        source_updated_at, ingested_at, last_source_seen_at, content_status,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(feed_id, identity_key) DO NOTHING`,
-    )
-    .bind(
-      feed.id,
-      key,
-      parsed.sourceId,
-      parsed.title,
-      url,
-      parsed.author,
-      parsed.publishedAt,
-      parsed.sourceUpdatedAt,
-      now,
-      now,
-      contentStatus,
-      now,
-      now,
-    )
-    .run();
-
-  const row = await db
-    .prepare("SELECT id FROM entries WHERE feed_id = ? AND identity_key = ?")
-    .bind(feed.id, key)
-    .first<{ id: number }>();
-  if (row === null) throw new Error("entry upsert did not produce an entry");
-
-  await db
-    .prepare(
-      `UPDATE entries
-       SET source_id = COALESCE(?, source_id),
-           title = CASE WHEN ? = '' THEN title ELSE ? END,
-           url = COALESCE(?, url),
-           author = COALESCE(?, author),
-           published_at = COALESCE(?, published_at),
-           source_updated_at = COALESCE(?, source_updated_at),
-           last_source_seen_at = ?,
-           content_status = ?,
-           updated_at = ?
-       WHERE id = ?`,
-    )
-    .bind(
-      parsed.sourceId,
-      parsed.title,
-      parsed.title,
-      url,
-      parsed.author,
-      parsed.publishedAt,
-      parsed.sourceUpdatedAt,
-      now,
-      contentStatus,
-      now,
-      row.id,
-    )
-    .run();
-
-  if ((inserted.meta.changes ?? 0) === 1) {
-    await db
-      .prepare(
-        `INSERT INTO entry_states (
-          entry_id, is_read, is_starred, read_changed_at, starred_changed_at, updated_at
-        ) VALUES (?, ?, 0, NULL, NULL, ?)`,
-      )
-      .bind(row.id, bootstrapRead ? 1 : 0, now)
-      .run();
-  }
-
-  if (contentStatus === "stored") {
-    const hash = await sha256Hex(parsed.contentHtml);
-    await db
-      .prepare(
-        `INSERT INTO entry_contents (
-          entry_id, content_html, content_hash, encoded_size_bytes, updated_at
-        ) VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(entry_id) DO UPDATE SET
-          content_html = excluded.content_html,
-          content_hash = excluded.content_hash,
-          encoded_size_bytes = excluded.encoded_size_bytes,
-          updated_at = excluded.updated_at`,
-      )
-      .bind(row.id, parsed.contentHtml, hash, bytes, now)
-      .run();
-  } else {
-    await db.prepare("DELETE FROM entry_contents WHERE entry_id = ?").bind(row.id).run();
-  }
-
-  return (inserted.meta.changes ?? 0) === 1;
-};
-
 const recordRedirectEvidence = async (
   db: D1Database,
   feed: DispatchedFeed,
@@ -428,11 +321,192 @@ export const persistSuccessfulRefresh = async (
 ): Promise<RefreshPersistResult> => {
   await recordRedirectEvidence(db, feed, message, responseMeta.permanentRedirectTarget, now);
 
-  let insertedEntries = 0;
   const bootstrapRead = feed.bootstrappedAt === null;
   const fetchedFeed = { ...feed, canonicalFeedUrl: responseMeta.finalUrl };
+  const preparedByKey = new Map<
+    string,
+    {
+      identityKey: string;
+      sourceId: string | null;
+      title: string;
+      url: string | null;
+      author: string | null;
+      publishedAt: number | null;
+      sourceUpdatedAt: number | null;
+      contentStatus: "empty" | "oversized" | "stored";
+      contentHtml: string | null;
+      contentHash: string | null;
+      bytes: number;
+    }
+  >();
+
   for (const entry of parsed.entries) {
-    if (await upsertEntry(db, fetchedFeed, entry, bootstrapRead, now)) insertedEntries += 1;
+    const key = await identityKey(entry, fetchedFeed.canonicalFeedUrl);
+    const url = canonicalizeEntryUrl(entry.url, fetchedFeed.canonicalFeedUrl);
+    const bytes = new TextEncoder().encode(entry.contentHtml).byteLength;
+    const contentStatus =
+      bytes === 0 ? "empty" : bytes > MAX_ENTRY_CONTENT_BYTES ? "oversized" : "stored";
+    preparedByKey.set(key, {
+      identityKey: key,
+      sourceId: entry.sourceId,
+      title: entry.title,
+      url,
+      author: entry.author,
+      publishedAt: entry.publishedAt,
+      sourceUpdatedAt: entry.sourceUpdatedAt,
+      contentStatus,
+      contentHtml: contentStatus === "stored" ? entry.contentHtml : null,
+      contentHash: contentStatus === "stored" ? await sha256Hex(entry.contentHtml) : null,
+      bytes,
+    });
+  }
+
+  const prepared = [...preparedByKey.values()];
+  const encoder = new TextEncoder();
+  const jsonChunks = (records: unknown[], maxBytes = 1_500_000): string[] => {
+    const chunks: string[] = [];
+    let current: unknown[] = [];
+    let currentBytes = 2;
+    for (const record of records) {
+      const serialized = JSON.stringify(record);
+      const recordBytes = encoder.encode(serialized).byteLength + (current.length === 0 ? 0 : 1);
+      if (recordBytes + 2 > maxBytes) {
+        throw new Error("bulk D1 record exceeds safe JSON parameter size");
+      }
+      if (current.length > 0 && currentBytes + recordBytes > maxBytes) {
+        chunks.push(JSON.stringify(current));
+        current = [];
+        currentBytes = 2;
+      }
+      current.push(record);
+      currentBytes += recordBytes;
+    }
+    if (current.length > 0) chunks.push(JSON.stringify(current));
+    return chunks;
+  };
+
+  const metadataRecords = prepared.map(
+    ({ contentHtml: _contentHtml, contentHash: _contentHash, bytes: _bytes, ...metadata }) =>
+      metadata,
+  );
+  const entrySql = `INSERT INTO entries (
+      feed_id, identity_key, source_id, title, url, author, published_at,
+      source_updated_at, ingested_at, last_source_seen_at, content_status,
+      created_at, updated_at
+    )
+    SELECT ?,
+           json_extract(j.value, '$.identityKey'),
+           json_extract(j.value, '$.sourceId'),
+           COALESCE(json_extract(j.value, '$.title'), ''),
+           json_extract(j.value, '$.url'),
+           json_extract(j.value, '$.author'),
+           json_extract(j.value, '$.publishedAt'),
+           json_extract(j.value, '$.sourceUpdatedAt'),
+           ?, ?, json_extract(j.value, '$.contentStatus'), ?, ?
+    FROM json_each(?) AS j
+    WHERE 1
+    ON CONFLICT(feed_id, identity_key) DO UPDATE SET
+      source_id = COALESCE(excluded.source_id, entries.source_id),
+      title = CASE WHEN excluded.title = '' THEN entries.title ELSE excluded.title END,
+      url = COALESCE(excluded.url, entries.url),
+      author = COALESCE(excluded.author, entries.author),
+      published_at = COALESCE(excluded.published_at, entries.published_at),
+      source_updated_at = COALESCE(excluded.source_updated_at, entries.source_updated_at),
+      last_source_seen_at = excluded.last_source_seen_at,
+      content_status = excluded.content_status,
+      updated_at = excluded.updated_at
+    WHERE COALESCE(excluded.source_id, entries.source_id) IS NOT entries.source_id
+       OR (CASE WHEN excluded.title = '' THEN entries.title ELSE excluded.title END) IS NOT entries.title
+       OR COALESCE(excluded.url, entries.url) IS NOT entries.url
+       OR COALESCE(excluded.author, entries.author) IS NOT entries.author
+       OR COALESCE(excluded.published_at, entries.published_at) IS NOT entries.published_at
+       OR COALESCE(excluded.source_updated_at, entries.source_updated_at) IS NOT entries.source_updated_at
+       OR excluded.content_status IS NOT entries.content_status`;
+  const stateSql = `INSERT OR IGNORE INTO entry_states (
+      entry_id, is_read, is_starred, read_changed_at, starred_changed_at, updated_at
+    )
+    SELECT e.id, ?, 0, NULL, NULL, ?
+    FROM json_each(?) AS j
+    JOIN entries e
+      ON e.feed_id = ?
+     AND e.identity_key = json_extract(j.value, '$.identityKey')`;
+
+  for (const chunk of jsonChunks(metadataRecords)) {
+    await db.prepare(entrySql).bind(feed.id, now, now, now, now, chunk).run();
+    await db
+      .prepare(stateSql)
+      .bind(bootstrapRead ? 1 : 0, now, chunk, feed.id)
+      .run();
+  }
+
+  const identityPayload = JSON.stringify(
+    prepared.map((record) => ({ identityKey: record.identityKey })),
+  );
+  const inserted =
+    prepared.length === 0
+      ? { count: 0 }
+      : await db
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM entries e
+             JOIN json_each(?) AS j
+               ON e.feed_id = ?
+              AND e.identity_key = json_extract(j.value, '$.identityKey')
+             WHERE e.created_at = ?`,
+          )
+          .bind(identityPayload, feed.id, now)
+          .first<{ count: number }>();
+  const insertedEntries = Number(inserted?.count ?? 0);
+
+  const storedRecords = prepared
+    .filter((record) => record.contentStatus === "stored")
+    .map((record) => ({
+      identityKey: record.identityKey,
+      contentHtml: record.contentHtml,
+      contentHash: record.contentHash,
+      bytes: record.bytes,
+    }));
+  const contentSql = `INSERT INTO entry_contents (
+      entry_id, content_html, content_hash, encoded_size_bytes, updated_at
+    )
+    SELECT e.id,
+           json_extract(j.value, '$.contentHtml'),
+           json_extract(j.value, '$.contentHash'),
+           json_extract(j.value, '$.bytes'),
+           ?
+    FROM json_each(?) AS j
+    JOIN entries e
+      ON e.feed_id = ?
+     AND e.identity_key = json_extract(j.value, '$.identityKey')
+    WHERE 1
+    ON CONFLICT(entry_id) DO UPDATE SET
+      content_html = excluded.content_html,
+      content_hash = excluded.content_hash,
+      encoded_size_bytes = excluded.encoded_size_bytes,
+      updated_at = excluded.updated_at
+    WHERE entry_contents.content_hash IS NOT excluded.content_hash
+       OR entry_contents.encoded_size_bytes IS NOT excluded.encoded_size_bytes`;
+  for (const chunk of jsonChunks(storedRecords)) {
+    await db.prepare(contentSql).bind(now, chunk, feed.id).run();
+  }
+
+  const withoutContent = prepared
+    .filter((record) => record.contentStatus !== "stored")
+    .map((record) => ({ identityKey: record.identityKey }));
+  for (const chunk of jsonChunks(withoutContent)) {
+    await db
+      .prepare(
+        `DELETE FROM entry_contents
+         WHERE entry_id IN (
+           SELECT e.id
+           FROM json_each(?) AS j
+           JOIN entries e
+             ON e.feed_id = ?
+            AND e.identity_key = json_extract(j.value, '$.identityKey')
+         )`,
+      )
+      .bind(chunk, feed.id)
+      .run();
   }
 
   if (feed.bootstrappedAt === null) {
@@ -474,7 +548,7 @@ export const persistSuccessfulRefresh = async (
     )
     .run();
 
-  return { insertedEntries, totalEntries: parsed.entries.length };
+  return { insertedEntries, totalEntries: prepared.length };
 };
 
 export const recordRefreshFailure = async (
