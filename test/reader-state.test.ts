@@ -86,12 +86,15 @@ const state = async (id: number): Promise<{ isRead: number; isStarred: number }>
 
 const streamIds = async (query: URLSearchParams): Promise<number[]> => {
   const response = await exports.default.fetch(
-    new Request(`${root}/stream/items/ids?${new URLSearchParams([
-      ["output", "json"],
-      ...query.entries(),
-    ]).toString()}`, {
-      headers: { Authorization: readerHeaders.Authorization },
-    }),
+    new Request(
+      `${root}/stream/items/ids?${new URLSearchParams([
+        ["output", "json"],
+        ...query.entries(),
+      ]).toString()}`,
+      {
+        headers: { Authorization: readerHeaders.Authorization },
+      },
+    ),
   );
   expect(response.status).toBe(200);
   const payload = (await response.json()) as { itemRefs: Array<{ id: string }> };
