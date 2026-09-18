@@ -15,11 +15,7 @@ import { normalizeReaderStream, readerCredential, readerParams } from "./reader-
 import { dispatchDueFeeds, enqueueFeedRefresh, processRefreshMessage } from "./refresh";
 import { mutateEntryStates } from "./state-store";
 import { ensureSubscription, listSubscriptions } from "./store";
-import {
-  findReaderEntries,
-  listStreamItemIds,
-  type StreamFilter,
-} from "./stream-store";
+import { findReaderEntries, listStreamItemIds, type StreamFilter } from "./stream-store";
 
 type AppBindings = {
   Bindings: Env;
@@ -190,7 +186,10 @@ const parseStreamSelection = (
   };
 };
 
-const streamTitle = (stream: string, entries: Awaited<ReturnType<typeof findReaderEntries>>): string => {
+const streamTitle = (
+  stream: string,
+  entries: Awaited<ReturnType<typeof findReaderEntries>>,
+): string => {
   if (stream === readingListStream) return "Reading List";
   if (stream === starredStream) return "Starred";
   const folderName = parseLabelName(stream);
