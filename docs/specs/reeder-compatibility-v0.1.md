@@ -70,13 +70,12 @@ Invalid or expired Reader credentials return HTTP 401, not 403.
 
 Authentication failures must remain distinguishable from malformed request failures.
 
-For Reader write requests:
+For Reader write requests, the pinned Miniflux 2.3.3 contract is authoritative:
 
-- a valid Authorization header is sufficient;
-- `T` is parsed from the normalized request parameter set;
-- when `T` contains the configured Reader token, it is accepted as an edit token;
-- a placeholder/non-secret `T` value such as `x` may be tolerated only when the Authorization header is already valid;
-- a placeholder `T` value must never authenticate a request by itself.
+- POST authentication uses `T=<configured Reader token>`;
+- an Authorization header does not replace a missing or invalid `T`;
+- `T` is parsed from the normalized query/form parameter set;
+- placeholder values such as `x` do not authenticate a request.
 
 The implementation must never log Authorization values or raw edit tokens.
 
@@ -89,9 +88,9 @@ The normalized parameter multimap is the union of:
 - URL query parameters;
 - `application/x-www-form-urlencoded` body parameters.
 
-Repeated values such as `i`, `a`, and `r` must be preserved.
+Repeated values such as `i`, `a`, `r`, and `s` must be preserved.
 
-For singleton fields present in both locations with different values, body value wins. Tests must cover a request with auth/edit metadata in the query and operation data in the body.
+For normal Reader POST parameters, singleton body values override query values. `edit-tag` is the exception: its state-changing `a` and `r` fields are read from the form body only, matching the pinned Miniflux implementation.
 
 ### 5.3 Stream identifier normalization
 
@@ -124,7 +123,7 @@ The existing endpoints remain supported. This compatibility pass additionally re
 
 The path form for stream contents must also work with URL-encoded stream identifiers.
 
-Unknown Reader endpoints remain explicit non-success responses and generate sanitized compatibility telemetry. Do not add a blanket HTTP-200 empty fallback.
+Authenticated Reader endpoints not implemented by the supported surface return the pinned Miniflux fallback: HTTP 200 with JSON `[]`. This fallback must not be confused with successful state-changing semantics on implemented endpoints, which still validate their parameters explicitly.
 
 ## 7. unread-count contract
 
@@ -282,7 +281,7 @@ For `ac=subscribe`, also accept the Reeder-compatible direct URL form:
 
 A subscribe request using a URL resolves canonical/alias Feed identity through the existing subscription service and enqueues refresh work as needed.
 
-Folder additions/removals remain idempotent.
+`ac=edit` with `a=user/-/label/<name>` moves the subscription to that target label, matching Miniflux category semantics. Removing a subscription label through `r` is not supported by this compatibility surface and returns HTTP 400.
 
 ## 14. Reader-state mutations
 
@@ -324,7 +323,8 @@ Reader auth outcomes:
 - invalid credential -> 401;
 - malformed operation parameters -> 400;
 - unknown logical resource -> 404 where applicable;
-- unsupported stream/operation -> explicit 4xx;
+- unsupported stream/filter on implemented endpoints -> explicit 4xx;
+- authenticated unknown Reader endpoint -> 200 with JSON `[]`;
 - upstream/internal transient failures -> 5xx.
 
 When returning 401 for an invalid Reader credential, include a Reader-compatible bad-token signal if the captured Reeder behavior shows the client uses it to trigger re-authentication.
@@ -378,8 +378,9 @@ Add/extend Worker integration tests for:
 - complete item envelope fields;
 - item Folder categories and Feed site URL;
 - POST query + form parameter merge;
-- valid Authorization with placeholder `T`;
-- token-only edit authentication when token is the configured secret;
+- GET Authorization authentication;
+- POST `T` authentication and rejection of Authorization-only writes;
+- `edit-tag` body-only `a/r` semantics;
 - invalid credentials returning 401;
 - `tag/list` Folder + starred metadata;
 - `quickadd` response shape;
@@ -387,7 +388,7 @@ Add/extend Worker integration tests for:
 - remove-kept-unread semantics;
 - mark-all timestamp parsing for seconds, milliseconds, and microseconds;
 - malformed/contradictory mutations failing explicitly;
-- unsupported Reader paths remaining non-success.
+- authenticated unknown Reader paths returning `[]` with HTTP 200.
 
 ### 17.2 Existing regression preservation
 
@@ -456,7 +457,7 @@ This compatibility specification is complete only when all of the following are 
 - Fever API;
 - multi-user behavior;
 - OAuth or account/session management;
-- generic unknown-endpoint HTTP-200 fallbacks;
+- expanding the Miniflux-style unknown-endpoint `[]` fallback into a claim of full Google Reader compatibility;
 - search, sharing, comments, annotations, recommendations, or social features;
 - webpage-to-feed discovery;
 - webpage full-text extraction;
