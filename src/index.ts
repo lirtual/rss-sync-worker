@@ -34,6 +34,10 @@ const textHeaders = {
 };
 const jsonHeaders = { "cache-control": "no-store" };
 
+const readerUsername = (env: Env): string => env.READER_USERNAME ?? env.USERNAME ?? "";
+const readerToken = (env: Env): string => env.READER_TOKEN ?? env.PASSWORD ?? "";
+const adminToken = (env: Env): string => env.ADMIN_TOKEN ?? env.PASSWORD ?? "";
+
 const textResponse = (body: string, status = 200): Response =>
   new Response(body, { status, headers: textHeaders });
 
@@ -61,7 +65,7 @@ const readerCredential = (authorization: string | undefined): string | null => {
 const requireReader: MiddlewareHandler<AppBindings> = async (context, next) => {
   const credential = readerCredential(context.req.header("Authorization"));
   if (credential === null) return textResponse("Error=AuthRequired\n", 401);
-  if (!(await safeEqual(credential, context.env.READER_TOKEN))) {
+  if (!(await safeEqual(credential, readerToken(context.env)))) {
     return textResponse("Error=InvalidAuthToken\n", 403);
   }
   await next();
@@ -73,7 +77,7 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   if (authorization === undefined || !authorization.startsWith(prefix)) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
-  if (!(await safeEqual(authorization.slice(prefix.length), context.env.ADMIN_TOKEN))) {
+  if (!(await safeEqual(authorization.slice(prefix.length), adminToken(context.env)))) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
   await next();
@@ -97,9 +101,13 @@ const parseFeedStream = (stream: string): number | null => {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
 
+const normalizeReaderStream = (value: string): string => value.replace(/^user\/\d+\//u, "user/-/");
+
 const parseLabelName = (value: string | null): string | null => {
-  if (value === null || !value.startsWith(labelPrefix)) return null;
-  const name = value.slice(labelPrefix.length).trim();
+  if (value === null) return null;
+  const normalized = normalizeReaderStream(value);
+  if (!normalized.startsWith(labelPrefix)) return null;
+  const name = normalized.slice(labelPrefix.length).trim();
   return name === "" ? null : name;
 };
 
@@ -115,10 +123,11 @@ const parseReaderCutoffMs = (raw: string | null, fallback: number): number | nul
 };
 
 const parseMarkAllScope = (stream: string): MarkAllScope | null => {
-  if (stream === readingListStream) return { kind: "reading-list" };
-  const feedId = parseFeedStream(stream);
+  const normalized = normalizeReaderStream(stream);
+  if (normalized === readingListStream) return { kind: "reading-list" };
+  const feedId = parseFeedStream(normalized);
   if (feedId !== null) return { kind: "feed", feedId };
-  const folderName = parseLabelName(stream);
+  const folderName = parseLabelName(normalized);
   return folderName === null ? null : { kind: "folder", folderName };
 };
 
@@ -132,25 +141,25 @@ app.post("/api/reader/accounts/ClientLogin", async (context) => {
   const username = form.get("Email") ?? "";
   const password = form.get("Passwd") ?? "";
   const [usernameMatches, passwordMatches] = await Promise.all([
-    safeEqual(username, context.env.READER_USERNAME),
-    safeEqual(password, context.env.READER_TOKEN),
+    safeEqual(username, readerUsername(context.env)),
+    safeEqual(password, readerToken(context.env)),
   ]);
 
   if (!usernameMatches || !passwordMatches) return textResponse("Error=BadAuthentication\n", 403);
-  const credential = context.env.READER_TOKEN;
+  const credential = readerToken(context.env);
   return textResponse(`SID=${credential}\nLSID=${credential}\nAuth=${credential}\n`);
 });
 
 app.use(`${readerRoot}/*`, requireReader);
 
-app.get(`${readerRoot}/token`, (context) => textResponse(context.env.READER_TOKEN));
+app.get(`${readerRoot}/token`, (context) => textResponse(readerToken(context.env)));
 
 app.get(`${readerRoot}/user-info`, (context) =>
   context.json(
     {
       userId: "1",
-      userName: context.env.READER_USERNAME,
-      userEmail: context.env.READER_USERNAME,
+      userName: readerUsername(context.env),
+      userEmail: readerUsername(context.env),
       userProfileId: "1",
     },
     200,
@@ -167,7 +176,11 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
     const now = Date.now();
     const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
     await enqueueFeedRefresh(context.env, feedId, now);
-    return context.json({ streamId: `feed/${feedId}` }, 200, jsonHeaders);
+    return context.json(
+      { numResults: 1, query: requestedUrl, streamId: `feed/${feedId}`, streamName: "" },
+      200,
+      jsonHeaders,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "subscription failed";
     const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
@@ -209,11 +222,19 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
 
 app.post(`${readerRoot}/subscription/edit`, async (context) => {
   const form = await readerForm(context.req.raw);
-  const feedId = parseFeedStream(form.get("s") ?? "");
-  if (feedId === null) return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
-
   const action = form.get("ac") ?? "edit";
   const now = Date.now();
+  const streamValue = form.get("s") ?? "";
+  let feedId = parseFeedStream(normalizeReaderStream(streamValue));
+  if (feedId === null && action === "subscribe" && streamValue.startsWith("feed/")) {
+    try {
+      feedId = await ensureSubscription(context.env.DB, streamValue.slice("feed/".length), now);
+      await enqueueFeedRefresh(context.env, feedId, now);
+    } catch {
+      return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
+    }
+  }
+  if (feedId === null) return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
   const active = action === "subscribe" ? true : action === "unsubscribe" ? false : undefined;
   if (action !== "edit" && active === undefined) {
     return context.json({ error: "BadAction" }, 400, jsonHeaders);
@@ -238,7 +259,16 @@ app.post(`${readerRoot}/subscription/edit`, async (context) => {
 app.get(`${readerRoot}/tag/list`, async (context) => {
   const folders = await listFolders(context.env.DB);
   return context.json(
-    { tags: folders.map((folder) => ({ id: labelId(folder.name) })) },
+    {
+      tags: [
+        { id: starredStream },
+        ...folders.map((folder) => ({
+          id: labelId(folder.name),
+          label: folder.name,
+          type: "folder",
+        })),
+      ],
+    },
     200,
     jsonHeaders,
   );
@@ -263,18 +293,82 @@ app.post(`${readerRoot}/disable-tag`, async (context) => {
   return textResponse("OK\n");
 });
 
+app.get(`${readerRoot}/unread-count`, async (context) => {
+  const [globalResult, feedResult, folderResult] = await Promise.all([
+    context.env.DB.prepare(
+      "SELECT SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM entries e JOIN subscriptions s ON s.feed_id = e.feed_id AND s.active = 1 JOIN entry_states es ON es.entry_id = e.id",
+    ).first<{ count: number | null; newest: number | null }>(),
+    context.env.DB.prepare(
+      "SELECT f.id AS feedId, SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM feeds f JOIN subscriptions s ON s.feed_id = f.id AND s.active = 1 LEFT JOIN entries e ON e.feed_id = f.id LEFT JOIN entry_states es ON es.entry_id = e.id GROUP BY f.id ORDER BY f.id",
+    ).all<{ feedId: number; count: number | null; newest: number | null }>(),
+    context.env.DB.prepare(
+      "SELECT folder.name AS folderName, SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM folders folder JOIN subscription_folders sf ON sf.folder_id = folder.id JOIN subscriptions s ON s.feed_id = sf.feed_id AND s.active = 1 LEFT JOIN entries e ON e.feed_id = s.feed_id LEFT JOIN entry_states es ON es.entry_id = e.id GROUP BY folder.id, folder.name ORDER BY folder.name",
+    ).all<{ folderName: string; count: number | null; newest: number | null }>(),
+  ]);
+
+  const unreadcounts: Array<{ id: string; count: number; newestItemTimestampUsec: string }> = [];
+  const appendCount = (
+    id: string,
+    row: { count?: number | null; newest?: number | null } | null,
+  ): void => {
+    const count = Number(row?.count ?? 0);
+    const newest = Number(row?.newest ?? 0);
+    unreadcounts.push({
+      id,
+      count,
+      newestItemTimestampUsec: String(Math.max(0, newest) * 1_000),
+    });
+  };
+
+  appendCount(readingListStream, globalResult);
+  for (const row of feedResult.results) appendCount(`feed/${row.feedId}`, row);
+  for (const row of folderResult.results) appendCount(labelId(row.folderName), row);
+
+  return context.json({ max: Number(globalResult?.count ?? 0), unreadcounts }, 200, jsonHeaders);
+});
+
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
   const url = new URL(context.req.url);
-  const stream = url.searchParams.get("s") ?? readingListStream;
+  const stream = normalizeReaderStream(url.searchParams.get("s") ?? readingListStream);
   const feedId = parseFeedStream(stream);
   const folderName = parseLabelName(stream);
-  const starredOnly = stream === starredStream;
-  if (stream !== readingListStream && !starredOnly && feedId === null && folderName === null) {
+  const includeTargets = new Set(url.searchParams.getAll("it").map(normalizeReaderStream));
+  const excludeTargets = new Set(url.searchParams.getAll("xt").map(normalizeReaderStream));
+  const readOnly = stream === readState || includeTargets.has(readState);
+  const starredOnly = stream === starredStream || includeTargets.has(starredStream);
+
+  if (
+    stream !== readingListStream &&
+    stream !== readState &&
+    stream !== starredStream &&
+    feedId === null &&
+    folderName === null
+  ) {
     return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
   }
 
   const limit = parsePositiveInt(url.searchParams.get("n"), 10_000, 10_000);
   if (limit === null) return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+
+  const parseSeconds = (raw: string | null): number | null => {
+    if (raw === null || raw === "") return null;
+    if (!/^\d+$/u.test(raw)) return Number.NaN;
+    const seconds = Number.parseInt(raw, 10);
+    if (
+      !Number.isSafeInteger(seconds) ||
+      seconds < 0 ||
+      seconds > Math.floor(Number.MAX_SAFE_INTEGER / 1_000)
+    ) {
+      return Number.NaN;
+    }
+    return seconds * 1_000;
+  };
+
+  const afterTime = parseSeconds(url.searchParams.get("ot"));
+  const beforeTime = parseSeconds(url.searchParams.get("nt"));
+  if (Number.isNaN(afterTime) || Number.isNaN(beforeTime)) {
+    return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+  }
 
   const rawContinuation = url.searchParams.get("c");
   const cursor = decodeContinuation(rawContinuation);
@@ -287,8 +381,13 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
     {
       feedId,
       folderName,
-      unreadOnly: url.searchParams.get("xt") === readState,
+      unreadOnly: excludeTargets.has(readState),
+      readOnly,
       starredOnly,
+      unstarredOnly: excludeTargets.has(starredStream),
+      afterTime,
+      beforeTime,
+      sortOldestFirst: url.searchParams.get("r") === "o",
     },
     cursor,
     limit,
@@ -309,7 +408,7 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
 app.post(`${readerRoot}/stream/items/contents`, async (context) => {
   const form = await readerForm(context.req.raw);
   const rawIds = form.getAll("i");
-  if (rawIds.length > 100) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+  if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
 
   const ids: number[] = [];
   for (const value of rawIds) {
@@ -321,6 +420,16 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
   const entries = await findReaderEntries(context.env.DB, ids);
   return context.json(
     {
+      direction: "ltr",
+      id: readingListStream,
+      title: "Reading List",
+      self: [
+        {
+          href: new URL(`${readerRoot}/stream/items/contents`, new URL(context.req.url).origin)
+            .href,
+        },
+      ],
+      author: readerUsername(context.env),
       items: entries.map(googleEntry),
       updated: Math.floor(Date.now() / 1_000),
     },
@@ -341,8 +450,8 @@ app.post(`${readerRoot}/edit-tag`, async (context) => {
     ids.push(id);
   }
 
-  const add = new Set(form.getAll("a"));
-  const remove = new Set(form.getAll("r"));
+  const add = new Set(form.getAll("a").map(normalizeReaderStream));
+  const remove = new Set(form.getAll("r").map(normalizeReaderStream));
   const mutation: { isRead?: boolean; isStarred?: boolean } = {};
 
   if (add.has(readState)) mutation.isRead = true;

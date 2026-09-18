@@ -10,6 +10,8 @@ interface Env {
   READER_USERNAME: string;
   READER_TOKEN: string;
   ADMIN_TOKEN: string;
+  USERNAME?: string;
+  PASSWORD?: string;
   DAILY_DISPATCH_BUDGET: string;
   REEDER_TRACE: string;
 }

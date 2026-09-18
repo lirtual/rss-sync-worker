@@ -4,7 +4,12 @@ export interface StreamFilter {
   feedId: number | null;
   folderName: string | null;
   unreadOnly: boolean;
+  readOnly: boolean;
   starredOnly: boolean;
+  unstarredOnly: boolean;
+  afterTime: number | null;
+  beforeTime: number | null;
+  sortOldestFirst: boolean;
 }
 
 export interface StreamItemRef {
@@ -39,13 +44,35 @@ export const listStreamItemIds = async (
     bindings.push(filter.folderName);
   }
   if (filter.unreadOnly) conditions.push("es.is_read = 0");
+  if (filter.readOnly) conditions.push("es.is_read = 1");
   if (filter.starredOnly) conditions.push("es.is_starred = 1");
+  if (filter.unstarredOnly) conditions.push("es.is_starred = 0");
+  if (filter.afterTime !== null) {
+    if (filter.readOnly) {
+      conditions.push(
+        "(COALESCE(e.published_at, e.ingested_at) >= ? OR COALESCE(es.read_changed_at, 0) >= ?)",
+      );
+      bindings.push(filter.afterTime, filter.afterTime);
+    } else {
+      conditions.push("COALESCE(e.published_at, e.ingested_at) >= ?");
+      bindings.push(filter.afterTime);
+    }
+  }
+  if (filter.beforeTime !== null) {
+    conditions.push("COALESCE(e.published_at, e.ingested_at) <= ?");
+    bindings.push(filter.beforeTime);
+  }
   if (cursor !== null) {
-    conditions.push("(e.ingested_at < ? OR (e.ingested_at = ? AND e.id < ?))");
+    conditions.push(
+      filter.sortOldestFirst
+        ? "(e.ingested_at > ? OR (e.ingested_at = ? AND e.id > ?))"
+        : "(e.ingested_at < ? OR (e.ingested_at = ? AND e.id < ?))",
+    );
     bindings.push(cursor.ingestedAt, cursor.ingestedAt, cursor.id);
   }
 
   bindings.push(limit + 1);
+  const direction = filter.sortOldestFirst ? "ASC" : "DESC";
   const result = await db
     .prepare(
       `SELECT e.id, e.ingested_at AS ingestedAt
@@ -53,7 +80,7 @@ export const listStreamItemIds = async (
        JOIN subscriptions s ON s.feed_id = e.feed_id
        JOIN entry_states es ON es.entry_id = e.id${folderJoin}
        WHERE ${conditions.join(" AND ")}
-       ORDER BY e.ingested_at DESC, e.id DESC
+       ORDER BY e.ingested_at ${direction}, e.id ${direction}
        LIMIT ?`,
     )
     .bind(...bindings)
