@@ -1,0 +1,49 @@
+name: Stage Reeder RC Bundle
+
+on:
+  push:
+    branches:
+      - ops/deploy-reeder-rc
+    paths:
+      - .github/workflows/stage-reeder-rc.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ops branch
+        uses: actions/checkout@v4
+
+      - name: Download verified CI artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf .stage
+          mkdir -p .stage
+          gh run download 35375025043 -n worker-bundle -D .stage
+
+      - name: Verify exact worker bundle
+        run: |
+          test -f .stage/worker.js
+          ACTUAL="$(sha256sum .stage/worker.js | awk '{print $1}')"
+          EXPECTED="398c807ed755c2313a3d8ac8ee4f4007d91218466c94834253dbe967f61d0f0a"
+          echo "worker.js sha256=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Stage compressed bundle
+        run: |
+          mkdir -p _deploy
+          gzip -c .stage/worker.js | base64 -w0 > _deploy/worker.js.gz.b64
+          printf '%s\n' "398c807ed755c2313a3d8ac8ee4f4007d91218466c94834253dbe967f61d0f0a" > _deploy/worker.js.sha256
+
+      - name: Commit staged bundle
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add _deploy/worker.js.gz.b64 _deploy/worker.js.sha256
+          git commit -m "chore: stage verified Reeder RC bundle"
+          git push origin HEAD:ops/deploy-reeder-rc
