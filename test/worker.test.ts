@@ -55,7 +55,7 @@ describe("worker foundation", () => {
     const invalid = await fetchWorker("/api/reader/reader/api/0/token", {
       headers: { Authorization: "GoogleLogin auth=wrong-token" },
     });
-    expect(invalid.status).toBe(403);
+    expect(invalid.status).toBe(401);
     expect(await invalid.text()).toBe("Error=InvalidAuthToken\n");
 
     const valid = await fetchWorker("/api/reader/reader/api/0/token", {
