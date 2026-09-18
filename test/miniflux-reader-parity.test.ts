@@ -58,7 +58,11 @@ describe("pinned Miniflux Google Reader baseline", () => {
     expect(deniedGet.headers.get("X-Reader-Google-Bad-Token")).toBe("true");
     expect(await deniedGet.text()).toBe("Unauthorized");
 
-    const feedId = await ensureSubscription(env.DB, "https://auth-baseline.example/feed.xml", Date.now());
+    const feedId = await ensureSubscription(
+      env.DB,
+      "https://auth-baseline.example/feed.xml",
+      Date.now(),
+    );
     const headerOnlyPost = await exports.default.fetch(
       new Request(`${root}/subscription/edit`, {
         method: "POST",
