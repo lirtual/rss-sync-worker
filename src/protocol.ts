@@ -79,9 +79,9 @@ export const decodeContinuation = (value: string | null): StreamCursor | null =>
 };
 
 export const googleEntry = (entry: ReaderEntry) => {
-  const categories = ["user/1/state/com.google/reading-list"];
-  if (entry.isRead === 1) categories.push("user/1/state/com.google/read");
-  if (entry.isStarred === 1) categories.push("user/1/state/com.google/starred");
+  const categories = ["user/-/state/com.google/reading-list"];
+  if (entry.isRead === 1) categories.push("user/-/state/com.google/read");
+  if (entry.isStarred === 1) categories.push("user/-/state/com.google/starred");
 
   const publishedAt = entry.publishedAt ?? entry.ingestedAt;
   const alternate = entry.url === null ? [] : [{ href: entry.url, type: "text/html" }];
