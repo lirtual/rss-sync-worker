@@ -78,7 +78,7 @@ Non-secret Worker variables in `wrangler.jsonc`:
 - `DAILY_DISPATCH_BUDGET` — default `1600`
 - `REEDER_TRACE` — default `0`; set to `1` only for the final sanitized real-Reeder capture
 
-`wrangler.jsonc` contains an all-zero D1 `database_id` placeholder. Replace it with the target D1 database ID before deployment and create/bind the `rss-sync-refresh` Queue.
+`wrangler.jsonc` is bound to the deployment D1 database and the `rss-sync-refresh` Queue. If you deploy this repository into another Cloudflare account, replace the D1 `database_id` with that account's database ID and create the Queue there.
 
 Apply all migrations before using a new remote database.
 
