@@ -114,10 +114,7 @@ export const replaceFolderMembership = async (
   ]);
 };
 
-export const deleteFoldersAndReassign = async (
-  db: D1Database,
-  names: string[],
-): Promise<void> => {
+export const deleteFoldersAndReassign = async (db: D1Database, names: string[]): Promise<void> => {
   const normalized = [...new Set(names.map(normalizeFolderName))];
   if (normalized.length === 0) return;
 
@@ -159,7 +156,10 @@ export const deleteFoldersAndReassign = async (
     .bind(replacement.id, ...folderIds, ...folderIds)
     .run();
 
-  await db.prepare(`DELETE FROM folders WHERE id IN (${placeholders})`).bind(...folderIds).run();
+  await db
+    .prepare(`DELETE FROM folders WHERE id IN (${placeholders})`)
+    .bind(...folderIds)
+    .run();
 };
 
 export const renameFolder = async (
