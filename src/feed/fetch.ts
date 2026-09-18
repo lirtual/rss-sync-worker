@@ -47,6 +47,20 @@ const isBlockedIpv4 = (parts: number[]): boolean => {
 const normalizedHostname = (url: URL): string =>
   url.hostname.replace(/^\[/u, "").replace(/\]$/u, "").toLowerCase();
 
+const isBlockedIpv6Literal = (hostname: string): boolean => {
+  if (!hostname.includes(":")) return false;
+  return (
+    hostname === "::" ||
+    hostname === "::1" ||
+    hostname.startsWith("fc") ||
+    hostname.startsWith("fd") ||
+    hostname.startsWith("fe8") ||
+    hostname.startsWith("fe9") ||
+    hostname.startsWith("fea") ||
+    hostname.startsWith("feb")
+  );
+};
+
 export const assertSafeFeedUrl = (input: string | URL): URL => {
   let url: URL;
   try {
@@ -75,16 +89,7 @@ export const assertSafeFeedUrl = (input: string | URL): URL => {
     throw new FeedFetchError("unsafe_target", "feed target is not publicly routable");
   }
 
-  if (
-    hostname === "::" ||
-    hostname === "::1" ||
-    hostname.startsWith("fc") ||
-    hostname.startsWith("fd") ||
-    hostname.startsWith("fe8") ||
-    hostname.startsWith("fe9") ||
-    hostname.startsWith("fea") ||
-    hostname.startsWith("feb")
-  ) {
+  if (isBlockedIpv6Literal(hostname)) {
     throw new FeedFetchError("unsafe_target", "feed target is not publicly routable");
   }
 
