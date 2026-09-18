@@ -56,6 +56,7 @@ describe("folders and subscription lifecycle", () => {
     expect(tags.tags.map((tag) => tag.id).sort()).toEqual([
       "user/-/label/Engineering",
       "user/-/label/Reading",
+      "user/-/state/com.google/starred",
     ]);
 
     const list = (await (await get("subscription/list")).json()) as {
