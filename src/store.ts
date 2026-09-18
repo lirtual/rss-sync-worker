@@ -433,7 +433,10 @@ export const persistSuccessfulRefresh = async (
 
   for (const chunk of jsonChunks(metadataRecords)) {
     await db.prepare(entrySql).bind(feed.id, now, now, now, now, chunk).run();
-    await db.prepare(stateSql).bind(bootstrapRead ? 1 : 0, now, chunk, feed.id).run();
+    await db
+      .prepare(stateSql)
+      .bind(bootstrapRead ? 1 : 0, now, chunk, feed.id)
+      .run();
   }
 
   const identityPayload = JSON.stringify(
