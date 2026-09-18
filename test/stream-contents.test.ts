@@ -103,7 +103,10 @@ describe("Reeder direct stream contents", () => {
       [`feed/${feedId}`, ""],
       ["user/-/label/Direct", ""],
       ["user/-/state/com.google/starred", ""],
-      ["user/-/state/com.google/reading-list", `xt=${encodeURIComponent("user/1/state/com.google/read")}`],
+      [
+        "user/-/state/com.google/reading-list",
+        `xt=${encodeURIComponent("user/1/state/com.google/read")}`,
+      ],
     ] as const;
 
     for (const [stream, extra] of cases) {
