@@ -34,6 +34,10 @@ const textHeaders = {
 };
 const jsonHeaders = { "cache-control": "no-store" };
 
+const readerUsername = (env: Env): string => env.READER_USERNAME ?? env.USERNAME ?? "";
+const readerToken = (env: Env): string => env.READER_TOKEN ?? env.PASSWORD ?? "";
+const adminToken = (env: Env): string => env.ADMIN_TOKEN ?? env.PASSWORD ?? "";
+
 const textResponse = (body: string, status = 200): Response =>
   new Response(body, { status, headers: textHeaders });
 
@@ -61,7 +65,7 @@ const readerCredential = (authorization: string | undefined): string | null => {
 const requireReader: MiddlewareHandler<AppBindings> = async (context, next) => {
   const credential = readerCredential(context.req.header("Authorization"));
   if (credential === null) return textResponse("Error=AuthRequired\n", 401);
-  if (!(await safeEqual(credential, context.env.READER_TOKEN))) {
+  if (!(await safeEqual(credential, readerToken(context.env)))) {
     return textResponse("Error=InvalidAuthToken\n", 403);
   }
   await next();
@@ -73,7 +77,7 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   if (authorization === undefined || !authorization.startsWith(prefix)) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
-  if (!(await safeEqual(authorization.slice(prefix.length), context.env.ADMIN_TOKEN))) {
+  if (!(await safeEqual(authorization.slice(prefix.length), adminToken(context.env)))) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
   await next();
@@ -97,9 +101,14 @@ const parseFeedStream = (stream: string): number | null => {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 };
 
+const normalizeReaderStream = (value: string): string =>
+  value.replace(/^user\/\d+\//u, "user/-/");
+
 const parseLabelName = (value: string | null): string | null => {
-  if (value === null || !value.startsWith(labelPrefix)) return null;
-  const name = value.slice(labelPrefix.length).trim();
+  if (value === null) return null;
+  const normalized = normalizeReaderStream(value);
+  if (!normalized.startsWith(labelPrefix)) return null;
+  const name = normalized.slice(labelPrefix.length).trim();
   return name === "" ? null : name;
 };
 
@@ -115,10 +124,11 @@ const parseReaderCutoffMs = (raw: string | null, fallback: number): number | nul
 };
 
 const parseMarkAllScope = (stream: string): MarkAllScope | null => {
-  if (stream === readingListStream) return { kind: "reading-list" };
-  const feedId = parseFeedStream(stream);
+  const normalized = normalizeReaderStream(stream);
+  if (normalized === readingListStream) return { kind: "reading-list" };
+  const feedId = parseFeedStream(normalized);
   if (feedId !== null) return { kind: "feed", feedId };
-  const folderName = parseLabelName(stream);
+  const folderName = parseLabelName(normalized);
   return folderName === null ? null : { kind: "folder", folderName };
 };
 
@@ -132,25 +142,25 @@ app.post("/api/reader/accounts/ClientLogin", async (context) => {
   const username = form.get("Email") ?? "";
   const password = form.get("Passwd") ?? "";
   const [usernameMatches, passwordMatches] = await Promise.all([
-    safeEqual(username, context.env.READER_USERNAME),
-    safeEqual(password, context.env.READER_TOKEN),
+    safeEqual(username, readerUsername(context.env)),
+    safeEqual(password, readerToken(context.env)),
   ]);
 
   if (!usernameMatches || !passwordMatches) return textResponse("Error=BadAuthentication\n", 403);
-  const credential = context.env.READER_TOKEN;
+  const credential = readerToken(context.env);
   return textResponse(`SID=${credential}\nLSID=${credential}\nAuth=${credential}\n`);
 });
 
 app.use(`${readerRoot}/*`, requireReader);
 
-app.get(`${readerRoot}/token`, (context) => textResponse(context.env.READER_TOKEN));
+app.get(`${readerRoot}/token`, (context) => textResponse(readerToken(context.env)));
 
 app.get(`${readerRoot}/user-info`, (context) =>
   context.json(
     {
       userId: "1",
-      userName: context.env.READER_USERNAME,
-      userEmail: context.env.READER_USERNAME,
+      userName: readerUsername(context.env),
+      userEmail: readerUsername(context.env),
       userProfileId: "1",
     },
     200,
@@ -167,7 +177,11 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
     const now = Date.now();
     const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
     await enqueueFeedRefresh(context.env, feedId, now);
-    return context.json({ streamId: `feed/${feedId}` }, 200, jsonHeaders);
+    return context.json(
+      { numResults: 1, query: requestedUrl, streamId: `feed/${feedId}`, streamName: "" },
+      200,
+      jsonHeaders,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "subscription failed";
     const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
@@ -209,11 +223,19 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
 
 app.post(`${readerRoot}/subscription/edit`, async (context) => {
   const form = await readerForm(context.req.raw);
-  const feedId = parseFeedStream(form.get("s") ?? "");
-  if (feedId === null) return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
-
   const action = form.get("ac") ?? "edit";
   const now = Date.now();
+  const streamValue = form.get("s") ?? "";
+  let feedId = parseFeedStream(normalizeReaderStream(streamValue));
+  if (feedId === null && action === "subscribe" && streamValue.startsWith("feed/")) {
+    try {
+      feedId = await ensureSubscription(context.env.DB, streamValue.slice("feed/".length), now);
+      await enqueueFeedRefresh(context.env, feedId, now);
+    } catch {
+      return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
+    }
+  }
+  if (feedId === null) return context.json({ error: "BadSubscription" }, 400, jsonHeaders);
   const active = action === "subscribe" ? true : action === "unsubscribe" ? false : undefined;
   if (action !== "edit" && active === undefined) {
     return context.json({ error: "BadAction" }, 400, jsonHeaders);
@@ -238,7 +260,12 @@ app.post(`${readerRoot}/subscription/edit`, async (context) => {
 app.get(`${readerRoot}/tag/list`, async (context) => {
   const folders = await listFolders(context.env.DB);
   return context.json(
-    { tags: folders.map((folder) => ({ id: labelId(folder.name) })) },
+    {
+      tags: [
+        { id: starredStream },
+        ...folders.map((folder) => ({ id: labelId(folder.name), label: folder.name, type: "folder" })),
+      ],
+    },
     200,
     jsonHeaders,
   );
