@@ -97,6 +97,7 @@ export const googleEntry = (entry: ReaderEntry) => {
     alternate,
     canonical,
     content: { direction: "ltr", content: entry.contentHtml },
+    summary: { direction: "ltr", content: entry.contentHtml },
     origin: { streamId: `feed/${entry.feedId}`, title: entry.feedTitle },
     categories,
     ...(entry.author === null || entry.author === "" ? {} : { author: entry.author }),
