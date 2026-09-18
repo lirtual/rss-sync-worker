@@ -71,7 +71,7 @@ const markAll = async (stream: string, cutoffMs?: number): Promise<Response> => 
     new Request(`${root}/mark-all-as-read`, {
       method: "POST",
       headers: authHeaders,
-      body: form,
+      body: new URLSearchParams([["T", "test-reader-token"], ...form.entries()]),
     }),
   );
 };
@@ -105,7 +105,7 @@ describe("mark-all-as-read", () => {
       .bind(
         feedId,
         "f".repeat(64),
-        base - 10_000_000,
+        cutoff + 1,
         cutoff + 1,
         cutoff + 1,
         cutoff + 1,
@@ -126,7 +126,7 @@ describe("mark-all-as-read", () => {
 
     const response = await markAll("user/-/state/com.google/reading-list", cutoff);
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe("OK\n");
+    expect(await response.text()).toBe("OK");
 
     expect(await unread("e.feed_id = ? AND e.ingested_at <= ?", [feedId, cutoff])).toBe(0);
     expect(await unread("e.feed_id = ?", [feedId])).toBe(1);
@@ -161,7 +161,7 @@ describe("mark-all-as-read", () => {
 
     const folderStream = await exports.default.fetch(
       new Request(
-        `${root}/stream/items/ids?s=${encodeURIComponent("user/-/label/Inbox Group")}&xt=${encodeURIComponent("user/-/state/com.google/read")}`,
+        `${root}/stream/items/ids?output=json&s=${encodeURIComponent("user/-/label/Inbox Group")}&xt=${encodeURIComponent("user/-/state/com.google/read")}`,
         { headers: { Authorization: authHeaders.Authorization } },
       ),
     );
