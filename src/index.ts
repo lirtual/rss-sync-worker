@@ -290,18 +290,86 @@ app.post(`${readerRoot}/disable-tag`, async (context) => {
   return textResponse("OK\n");
 });
 
+app.get(`${readerRoot}/unread-count`, async (context) => {
+  const [globalResult, feedResult, folderResult] = await Promise.all([
+    context.env.DB.prepare(
+      "SELECT SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM entries e JOIN subscriptions s ON s.feed_id = e.feed_id AND s.active = 1 JOIN entry_states es ON es.entry_id = e.id",
+    ).first<{ count: number | null; newest: number | null }>(),
+    context.env.DB.prepare(
+      "SELECT f.id AS feedId, SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM feeds f JOIN subscriptions s ON s.feed_id = f.id AND s.active = 1 LEFT JOIN entries e ON e.feed_id = f.id LEFT JOIN entry_states es ON es.entry_id = e.id GROUP BY f.id ORDER BY f.id",
+    ).all<{ feedId: number; count: number | null; newest: number | null }>(),
+    context.env.DB.prepare(
+      "SELECT folder.name AS folderName, SUM(CASE WHEN es.is_read = 0 THEN 1 ELSE 0 END) AS count, COALESCE(MAX(e.ingested_at), 0) AS newest FROM folders folder JOIN subscription_folders sf ON sf.folder_id = folder.id JOIN subscriptions s ON s.feed_id = sf.feed_id AND s.active = 1 LEFT JOIN entries e ON e.feed_id = s.feed_id LEFT JOIN entry_states es ON es.entry_id = e.id GROUP BY folder.id, folder.name ORDER BY folder.name",
+    ).all<{ folderName: string; count: number | null; newest: number | null }>(),
+  ]);
+
+  const unreadcounts: Array<{ id: string; count: number; newestItemTimestampUsec: string }> = [];
+  const appendCount = (
+    id: string,
+    row: { count?: number | null; newest?: number | null } | null,
+  ): void => {
+    const count = Number(row?.count ?? 0);
+    const newest = Number(row?.newest ?? 0);
+    unreadcounts.push({
+      id,
+      count,
+      newestItemTimestampUsec: String(Math.max(0, newest) * 1_000),
+    });
+  };
+
+  appendCount(readingListStream, globalResult);
+  for (const row of feedResult.results) appendCount(`feed/${row.feedId}`, row);
+  for (const row of folderResult.results) appendCount(labelId(row.folderName), row);
+
+  return context.json(
+    { max: Number(globalResult?.count ?? 0), unreadcounts },
+    200,
+    jsonHeaders,
+  );
+});
+
 app.get(`${readerRoot}/stream/items/ids`, async (context) => {
   const url = new URL(context.req.url);
-  const stream = url.searchParams.get("s") ?? readingListStream;
+  const stream = normalizeReaderStream(url.searchParams.get("s") ?? readingListStream);
   const feedId = parseFeedStream(stream);
   const folderName = parseLabelName(stream);
-  const starredOnly = stream === starredStream;
-  if (stream !== readingListStream && !starredOnly && feedId === null && folderName === null) {
+  const includeTargets = new Set(url.searchParams.getAll("it").map(normalizeReaderStream));
+  const excludeTargets = new Set(url.searchParams.getAll("xt").map(normalizeReaderStream));
+  const readOnly = stream === readState || includeTargets.has(readState);
+  const starredOnly = stream === starredStream || includeTargets.has(starredStream);
+
+  if (
+    stream !== readingListStream &&
+    stream !== readState &&
+    stream !== starredStream &&
+    feedId === null &&
+    folderName === null
+  ) {
     return context.json({ error: "UnsupportedStream" }, 400, jsonHeaders);
   }
 
   const limit = parsePositiveInt(url.searchParams.get("n"), 10_000, 10_000);
   if (limit === null) return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+
+  const parseSeconds = (raw: string | null): number | null => {
+    if (raw === null || raw === "") return null;
+    if (!/^\d+$/u.test(raw)) return Number.NaN;
+    const seconds = Number.parseInt(raw, 10);
+    if (
+      !Number.isSafeInteger(seconds) ||
+      seconds < 0 ||
+      seconds > Math.floor(Number.MAX_SAFE_INTEGER / 1_000)
+    ) {
+      return Number.NaN;
+    }
+    return seconds * 1_000;
+  };
+
+  const afterTime = parseSeconds(url.searchParams.get("ot"));
+  const beforeTime = parseSeconds(url.searchParams.get("nt"));
+  if (Number.isNaN(afterTime) || Number.isNaN(beforeTime)) {
+    return context.json({ error: "BadRequest" }, 400, jsonHeaders);
+  }
 
   const rawContinuation = url.searchParams.get("c");
   const cursor = decodeContinuation(rawContinuation);
@@ -314,8 +382,13 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
     {
       feedId,
       folderName,
-      unreadOnly: url.searchParams.get("xt") === readState,
+      unreadOnly: excludeTargets.has(readState),
+      readOnly,
       starredOnly,
+      unstarredOnly: excludeTargets.has(starredStream),
+      afterTime,
+      beforeTime,
+      sortOldestFirst: url.searchParams.get("r") === "o",
     },
     cursor,
     limit,
@@ -336,7 +409,7 @@ app.get(`${readerRoot}/stream/items/ids`, async (context) => {
 app.post(`${readerRoot}/stream/items/contents`, async (context) => {
   const form = await readerForm(context.req.raw);
   const rawIds = form.getAll("i");
-  if (rawIds.length > 100) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
+  if (rawIds.length > 1_000) return context.json({ error: "TooManyItems" }, 400, jsonHeaders);
 
   const ids: number[] = [];
   for (const value of rawIds) {
@@ -348,6 +421,18 @@ app.post(`${readerRoot}/stream/items/contents`, async (context) => {
   const entries = await findReaderEntries(context.env.DB, ids);
   return context.json(
     {
+      direction: "ltr",
+      id: readingListStream,
+      title: "Reading List",
+      self: [
+        {
+          href: new URL(
+            `${readerRoot}/stream/items/contents`,
+            new URL(context.req.url).origin,
+          ).href,
+        },
+      ],
+      author: readerUsername(context.env),
       items: entries.map(googleEntry),
       updated: Math.floor(Date.now() / 1_000),
     },
@@ -368,8 +453,8 @@ app.post(`${readerRoot}/edit-tag`, async (context) => {
     ids.push(id);
   }
 
-  const add = new Set(form.getAll("a"));
-  const remove = new Set(form.getAll("r"));
+  const add = new Set(form.getAll("a").map(normalizeReaderStream));
+  const remove = new Set(form.getAll("r").map(normalizeReaderStream));
   const mutation: { isRead?: boolean; isStarred?: boolean } = {};
 
   if (add.has(readState)) mutation.isRead = true;
