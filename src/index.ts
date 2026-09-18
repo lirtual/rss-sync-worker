@@ -211,8 +211,17 @@ const parseReaderCutoffMs = (raw: string | null, fallback: number): number | nul
   if (raw === null || raw === "") return fallback;
   if (!/^\d+$/u.test(raw)) return null;
   const numeric = Number(raw);
-  if (!Number.isSafeInteger(numeric) || numeric < 0) return null;
-  const milliseconds = numeric >= 100_000_000_000_000 ? Math.floor(numeric / 1_000) : numeric;
+  if (!Number.isSafeInteger(numeric) || numeric < 1_000_000_000) return null;
+
+  let milliseconds: number;
+  if (numeric >= 100_000_000_000_000) {
+    milliseconds = Math.floor(numeric / 1_000);
+  } else if (numeric >= 100_000_000_000) {
+    milliseconds = numeric;
+  } else {
+    milliseconds = numeric * 1_000;
+  }
+
   return Number.isSafeInteger(milliseconds) ? milliseconds : null;
 };
 
@@ -533,12 +542,19 @@ app.post(`${readerRoot}/edit-tag`, async (context) => {
 
   const add = new Set(form.getAll("a").map(normalizeReaderStream));
   const remove = new Set(form.getAll("r").map(normalizeReaderStream));
-  const mutation: { isRead?: boolean; isStarred?: boolean } = {};
+  const readTrue = add.has(readState) || remove.has(keptUnreadState);
+  const readFalse = remove.has(readState) || add.has(keptUnreadState);
+  const starredTrue = add.has(starredStream);
+  const starredFalse = remove.has(starredStream);
+  if ((readTrue && readFalse) || (starredTrue && starredFalse)) {
+    return context.json({ error: "ContradictoryStateMutation" }, 400, jsonHeaders);
+  }
 
-  if (add.has(readState)) mutation.isRead = true;
-  if (remove.has(readState) || add.has(keptUnreadState)) mutation.isRead = false;
-  if (add.has(starredStream)) mutation.isStarred = true;
-  if (remove.has(starredStream)) mutation.isStarred = false;
+  const mutation: { isRead?: boolean; isStarred?: boolean } = {};
+  if (readTrue) mutation.isRead = true;
+  if (readFalse) mutation.isRead = false;
+  if (starredTrue) mutation.isStarred = true;
+  if (starredFalse) mutation.isStarred = false;
 
   await mutateEntryStates(context.env.DB, ids, mutation, Date.now());
   return textResponse("OK\n");
