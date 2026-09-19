@@ -573,7 +573,20 @@ export const persistSuccessfulRefresh = async (
       updated_at = excluded.updated_at
     WHERE entry_contents.content_hash IS NOT excluded.content_hash
        OR entry_contents.encoded_size_bytes IS NOT excluded.encoded_size_bytes`;
+  const touchContentChangesSql = `UPDATE entries
+    SET updated_at = ?
+    WHERE id IN (
+      SELECT e.id
+      FROM json_each(?) AS j
+      JOIN entries e
+        ON e.feed_id = ?
+       AND e.identity_key = json_extract(j.value, '$.identityKey')
+      JOIN entry_contents ec ON ec.entry_id = e.id
+      WHERE ec.content_hash IS NOT json_extract(j.value, '$.contentHash')
+         OR ec.encoded_size_bytes IS NOT json_extract(j.value, '$.bytes')
+    )`;
   for (const chunk of jsonChunks(storedRecords)) {
+    await db.prepare(touchContentChangesSql).bind(now, chunk, feed.id).run();
     await db.prepare(contentSql).bind(now, chunk, feed.id).run();
   }
 
