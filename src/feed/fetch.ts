@@ -97,11 +97,11 @@ export const assertSafeFeedUrl = (input: string | URL): URL => {
   return url;
 };
 
-const readBodyLimited = async (response: Response): Promise<Uint8Array> => {
+const readBodyLimited = async (response: Response, maxBodyBytes: number): Promise<Uint8Array> => {
   const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && Number(contentLength) > MAX_BODY_BYTES) {
+  if (contentLength !== null && Number(contentLength) > maxBodyBytes) {
     await response.body?.cancel();
-    throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
+    throw new FeedFetchError("response_too_large", "feed response exceeds configured size limit");
   }
   if (response.body === null) return new Uint8Array();
 
@@ -113,9 +113,9 @@ const readBodyLimited = async (response: Response): Promise<Uint8Array> => {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_BODY_BYTES) {
+      if (total > maxBodyBytes) {
         await reader.cancel();
-        throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
+        throw new FeedFetchError("response_too_large", "feed response exceeds configured size limit");
       }
       chunks.push(value);
     }
@@ -150,19 +150,28 @@ const fetchWithTimeout = async (
   }
 };
 
+export interface FeedFetchOptions {
+  maxBodyBytes?: number;
+  accept?: string;
+}
+
 export const fetchFeedDocument = async (
   input: string,
   conditional: { etag: string | null; lastModified: string | null },
   fetcher: typeof fetch = fetch,
+  options: FeedFetchOptions = {},
 ): Promise<FeedFetchResult> => {
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
+  const accept =
+    options.accept ??
+    "application/atom+xml, application/rss+xml, application/feed+json, application/json, application/xml, text/xml;q=0.9, */*;q=0.1";
   let current = assertSafeFeedUrl(input);
   let permanentOnly = true;
   let followedPermanentRedirect = false;
 
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     const headers = new Headers({
-      Accept:
-        "application/atom+xml, application/rss+xml, application/feed+json, application/json, application/xml, text/xml;q=0.9, */*;q=0.1",
+      Accept: accept,
       "User-Agent": "rss-sync-worker/0.1",
     });
     if (conditional.etag !== null) headers.set("If-None-Match", conditional.etag);
@@ -207,7 +216,7 @@ export const fetchFeedDocument = async (
 
     return {
       status: "fetched",
-      body: await readBodyLimited(response),
+      body: await readBodyLimited(response, maxBodyBytes),
       finalUrl: current.toString(),
       permanentRedirectTarget:
         followedPermanentRedirect && permanentOnly && current.toString() !== input
