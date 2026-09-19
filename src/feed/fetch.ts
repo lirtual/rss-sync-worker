@@ -131,7 +131,8 @@ const readBodyLimited = async (
   const reader = response.body.getReader();
   let total = 0;
   let sniff = new Uint8Array();
-  let sniffComplete = maxHtmlBodyBytes === null || isHtmlContentType(response.headers.get("content-type"));
+  let sniffComplete =
+    maxHtmlBodyBytes === null || isHtmlContentType(response.headers.get("content-type"));
   const chunks: Uint8Array[] = [];
   try {
     for (;;) {
