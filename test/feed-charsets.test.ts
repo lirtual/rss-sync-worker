@@ -17,10 +17,7 @@ const concat = (...parts: Uint8Array[]): Uint8Array => {
   return result;
 };
 
-const xmlWithLegacyTitle = (
-  encoding: string,
-  titleBytes: Uint8Array,
-): Uint8Array =>
+const xmlWithLegacyTitle = (encoding: string, titleBytes: Uint8Array): Uint8Array =>
   concat(
     ascii(`<?xml version="1.0" encoding="${encoding}"?><rss version="2.0"><channel><title>`),
     titleBytes,
@@ -74,7 +71,7 @@ const refreshTitle = async (
 
 describe("feed charset decoding", () => {
   it("prefers BOM over a conflicting HTTP charset", () => {
-    const document = utf16("<?xml version=\"1.0\"?><rss></rss>", true);
+    const document = utf16('<?xml version="1.0"?><rss></rss>', true);
     const decoded = decodeFeedDocument(document, "application/xml; charset=windows-1252");
     expect(decoded.encoding).toBe("utf-16le");
     expect(decoded.text).toContain("<rss>");
@@ -91,11 +88,7 @@ describe("feed charset decoding", () => {
 
   it("decodes Windows-1252 declared by HTTP", async () => {
     const body = xmlWithLegacyTitle("windows-1252", new Uint8Array([0x43, 0x61, 0x66, 0xe9]));
-    const result = await refreshTitle(
-      "windows1252",
-      body,
-      "application/xml; charset=windows-1252",
-    );
+    const result = await refreshTitle("windows1252", body, "application/xml; charset=windows-1252");
     expect(result).toMatchObject({ result: "processed", title: "Café", errorClass: null });
   });
 
