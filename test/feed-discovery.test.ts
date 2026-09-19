@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { discoverFeed } from "../src/feed/discovery";
-import { FeedFetchError } from "../src/feed/fetch";
+import type { FeedFetchError } from "../src/feed/fetch";
 
 const response = (body: string, contentType: string): Response =>
   new Response(body, { status: 200, headers: { "content-type": contentType } });
