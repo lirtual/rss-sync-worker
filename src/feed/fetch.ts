@@ -162,7 +162,7 @@ export const fetchFeedDocument = async (
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     const headers = new Headers({
       Accept:
-        "application/atom+xml, application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+        "application/atom+xml, application/rss+xml, application/feed+json, application/json, application/xml, text/xml;q=0.9, */*;q=0.1",
       "User-Agent": "rss-sync-worker/0.1",
     });
     if (conditional.etag !== null) headers.set("If-None-Match", conditional.etag);
