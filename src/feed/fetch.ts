@@ -14,7 +14,8 @@ export class FeedFetchError extends Error {
 
 export interface FeedFetchResult {
   status: "not-modified" | "fetched";
-  body: string | null;
+  body: Uint8Array | null;
+  contentType: string | null;
   finalUrl: string;
   permanentRedirectTarget: string | null;
   etag: string | null;
@@ -96,18 +97,17 @@ export const assertSafeFeedUrl = (input: string | URL): URL => {
   return url;
 };
 
-const readBodyLimited = async (response: Response): Promise<string> => {
+const readBodyLimited = async (response: Response): Promise<Uint8Array> => {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null && Number(contentLength) > MAX_BODY_BYTES) {
     await response.body?.cancel();
     throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
   }
-  if (response.body === null) return "";
+  if (response.body === null) return new Uint8Array();
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let total = 0;
-  const chunks: string[] = [];
+  const chunks: Uint8Array[] = [];
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -117,10 +117,15 @@ const readBodyLimited = async (response: Response): Promise<string> => {
         await reader.cancel();
         throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
       }
-      chunks.push(decoder.decode(value, { stream: true }));
+      chunks.push(value);
     }
-    chunks.push(decoder.decode());
-    return chunks.join("");
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return body;
   } finally {
     reader.releaseLock();
   }
@@ -191,6 +196,7 @@ export const fetchFeedDocument = async (
             : null,
         etag: response.headers.get("etag") ?? conditional.etag,
         lastModified: response.headers.get("last-modified") ?? conditional.lastModified,
+        contentType: response.headers.get("content-type"),
       };
     }
 
@@ -209,6 +215,7 @@ export const fetchFeedDocument = async (
           : null,
       etag: response.headers.get("etag"),
       lastModified: response.headers.get("last-modified"),
+      contentType: response.headers.get("content-type"),
     };
   }
 
