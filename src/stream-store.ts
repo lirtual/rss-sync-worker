@@ -90,11 +90,19 @@ export const listStreamItemIds = async (
   return { items: result.results.slice(0, limit), hasMore };
 };
 
-type ReaderEntryRow = Omit<ReaderEntry, "folderNames">;
+type ReaderEntryRow = Omit<ReaderEntry, "folderNames" | "enclosures">;
 
 interface FeedFolderRow {
   feedId: number;
   folderName: string;
+}
+
+interface EntryEnclosureRow {
+  entryId: number;
+  url: string;
+  mimeType: string | null;
+  lengthBytes: number | null;
+  title: string | null;
 }
 
 export const findReaderEntries = async (db: D1Database, ids: number[]): Promise<ReaderEntry[]> => {
@@ -126,6 +134,30 @@ export const findReaderEntries = async (db: D1Database, ids: number[]): Promise<
     .bind(...ids)
     .all<ReaderEntryRow>();
 
+  const entryIds = result.results.map((entry) => entry.id);
+  const enclosuresByEntry = new Map<number, EntryEnclosureRow[]>();
+  if (entryIds.length > 0) {
+    const entryPlaceholders = entryIds.map(() => "?").join(", ");
+    const enclosureResult = await db
+      .prepare(
+        `SELECT entry_id AS entryId,
+                url,
+                mime_type AS mimeType,
+                length_bytes AS lengthBytes,
+                title
+         FROM entry_enclosures
+         WHERE entry_id IN (${entryPlaceholders})
+         ORDER BY entry_id, position`,
+      )
+      .bind(...entryIds)
+      .all<EntryEnclosureRow>();
+    for (const enclosure of enclosureResult.results) {
+      const values = enclosuresByEntry.get(enclosure.entryId) ?? [];
+      values.push(enclosure);
+      enclosuresByEntry.set(enclosure.entryId, values);
+    }
+  }
+
   const feedIds = [...new Set(result.results.map((entry) => entry.feedId))];
   const foldersByFeed = new Map<number, string[]>();
   if (feedIds.length > 0) {
@@ -151,7 +183,11 @@ export const findReaderEntries = async (db: D1Database, ids: number[]): Promise<
   const byId = new Map(
     result.results.map((entry) => [
       entry.id,
-      { ...entry, folderNames: foldersByFeed.get(entry.feedId) ?? [] },
+      {
+        ...entry,
+        folderNames: foldersByFeed.get(entry.feedId) ?? [],
+        enclosures: enclosuresByEntry.get(entry.id) ?? [],
+      },
     ]),
   );
   return ids.flatMap((id) => {
