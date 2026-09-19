@@ -190,7 +190,7 @@ describe("Reeder article time semantics", () => {
       "2026-09-19T04:00:24.000Z",
       "2026-09-19T00:59:13.000Z",
     ].entries()) {
-      const publishedAt = parsed.entries[index]?.publishedAt;
+      const publishedAt = parsed.entries[index]?.publishedAt ?? null;
       expect(publishedAt).toBe(Date.parse(expectedIso));
       const item = googleEntry({ ...entryBase, publishedAt });
       expect(item.published).toBe(Math.floor(Date.parse(expectedIso) / 1_000));
