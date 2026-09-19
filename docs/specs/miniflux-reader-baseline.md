@@ -148,3 +148,8 @@ Every Miniflux endpoint above must have contract tests for:
 - timestamp and pagination semantics
 
 Every intentional deviation must have a dedicated test and a comment linking it to this document.
+
+
+## Intentional rss-sync-worker deviation: mark-all cutoff
+
+Bulk mark-all-as-read uses service-owned `entries.ingested_at` as the cutoff boundary rather than publisher-controlled publication time. An article first ingested after the user's cutoff remains unread even when its published date is older than the cutoff. This preserves the rss-sync-worker Reader State invariant and is intentionally not a byte-for-byte copy of Miniflux 2.3.3 behavior.
