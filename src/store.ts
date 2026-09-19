@@ -13,6 +13,7 @@ export interface SubscriptionView {
   feedUrl: string;
   siteUrl: string | null;
   title: string;
+  iconExternalId: string | null;
 }
 
 export interface DispatchedFeed {
@@ -135,9 +136,11 @@ export const listSubscriptions = async (db: D1Database): Promise<SubscriptionVie
       `SELECT f.id AS feedId,
               f.canonical_feed_url AS feedUrl,
               f.site_url AS siteUrl,
-              COALESCE(s.custom_title, NULLIF(f.title, ''), f.canonical_feed_url) AS title
+              COALESCE(s.custom_title, NULLIF(f.title, ''), f.canonical_feed_url) AS title,
+              CASE WHEN fi.status = 'found' THEN fi.external_id ELSE NULL END AS iconExternalId
        FROM subscriptions s
        JOIN feeds f ON f.id = s.feed_id
+       LEFT JOIN feed_icons fi ON fi.feed_id = f.id
        WHERE s.active = 1
        ORDER BY title COLLATE NOCASE, f.id`,
     )
