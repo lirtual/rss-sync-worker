@@ -1,3 +1,4 @@
+import { decodeFeedDocument } from "./feed/decode";
 import { fetchFeedDocument } from "./feed/fetch";
 import { parseFeed } from "./feed/parser";
 import {
@@ -112,7 +113,8 @@ export const processRefreshMessage = async (
       return "not-modified";
     }
 
-    const parsed = parseFeed(new TextDecoder().decode(fetched.body ?? new Uint8Array()));
+    const decoded = decodeFeedDocument(fetched.body ?? new Uint8Array(), fetched.contentType);
+    const parsed = parseFeed(decoded.text);
     await persistSuccessfulRefresh(env.DB, feed, message, parsed, responseMeta, now);
     return "processed";
   } catch (error) {
