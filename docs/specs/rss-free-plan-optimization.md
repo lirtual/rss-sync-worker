@@ -33,11 +33,11 @@
 
 ### 凭证与调试（03）
 
-Reader 优先 `READER_USERNAME/READER_TOKEN`，兼容当前 `USERNAME/PASSWORD`；Admin 只能使用单独、非空的 `ADMIN_TOKEN`，不从 Reader 密码回退。线上如缺少 Admin secret，必须在部署前由操作者在平台安全设置中配置，**不能放入仓库**。生产 `REEDER_TRACE=0`，兼容性抓包仅短时开启并及时恢复。
+Reader 和 Admin 均使用既有的 `USERNAME/PASSWORD`；Admin Bearer 与 Reader token 均使用 `PASSWORD`。不引入独立 Admin 密钥；密码缺失或空值必须拒绝认证。生产 `REEDER_TRACE=0`，兼容性抓包仅短时开启并及时恢复。
 
 ## 测试与放行（07）
 
-`npm run check`（Biome、TypeScript、workerd-backed Vitest/D1、Wrangler dry-run）通过，包含：预算/未知发送、跨 UTC 日、304/200/错误与安静恢复、重复阅读状态、Admin 缺失凭证、重定向 alias、Reeder 订阅/列表/分页/未读/收藏/Logo 回归。对比一个完整 UTC 日的 Queue 实际 ops、D1 实际行读写、CPU p95/p99、错误和最老待刷新时间；缺失即标注“未验证”，不得虚构节省比例。
+`npm run check`（Biome、TypeScript、workerd-backed Vitest/D1、Wrangler dry-run）通过，包含：预算/未知发送、跨 UTC 日、304/200/错误与安静恢复、重复阅读状态、共享密码缺失或空值、重定向 alias、Reeder 订阅/列表/分页/未读/收藏/Logo 回归。对比一个完整 UTC 日的 Queue 实际 ops、D1 实际行读写、CPU p95/p99、错误和最老待刷新时间；缺失即标注“未验证”，不得虚构节省比例。
 
 部署前核对最新 `main`、当前生产版本、所需 Secrets/Vars/Queue/D1/Cron，并保留回滚参考；仅在用户确认生产发布后再部署。优化存在兼容性回归时恢复旧代码或调度，不清空已有文章、未读、收藏或未确认消息。
 

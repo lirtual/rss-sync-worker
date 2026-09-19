@@ -5,7 +5,7 @@
 1. 确认 `main` 与线上 Worker 当前版本；检查是否存在 API 热修复/运行时变量覆盖。保留原部署版本及 D1 备份（若有迁移）。
 2. 绑定：`DB` 指向现有 `rss-sync-worker` D1；`REFRESH_QUEUE` 指向 `rss-sync-refresh`；保持正式 Worker 名称和两条 Cron，不新增存储/付费资源。
 3. 非敏感变量：`DAILY_DISPATCH_BUDGET=1600`、`REEDER_TRACE=0`。先确认 Cloudflare 控制台实际值；仓库配置不能证明线上已生效。
-4. 敏感变量：`ADMIN_TOKEN` 必须是非空且独立于 Reader 的密钥。Reader 推荐 `READER_USERNAME/READER_TOKEN`，当前兼容 `USERNAME/PASSWORD`；若缺失 Admin 密钥，**先由用户在 Cloudflare Secrets 中安全补齐，不要在日志或仓库显示它**。测试生产 Admin 端点时使用真实单独密钥，绝不借用 Reader token。
+4. 敏感变量：仅使用已有 `USERNAME` 与 `PASSWORD`，Reader 和 Admin 共用非空 `PASSWORD`。不要新增独立的 Admin/Reader Secret；在 Cloudflare 只核对 Secret 是否存在，不读取、记录或提交其明文。
 5. `npm run check` 与真实 Reeder 冒烟必须全部完成，再考虑生产部署；PR/CI 通过不代表线上已更新。
 
 ## 额度与故障信号

@@ -10,7 +10,7 @@ The suite maps to the release contract as follows:
 
 | Behavior | Automated evidence |
 | --- | --- |
-| ClientLogin, token, user info, separate Admin auth | `test/worker.test.ts` |
+| ClientLogin, token, user info, shared-password Admin auth | `test/worker.test.ts` |
 | Bootstrap history-read boundary and later unread entries | `test/bootstrap.test.ts` |
 | Stable keyset pagination and item content/ID representations | `test/item-sync.test.ts` |
 | Read/unread/kept-unread and star/unstar round trips | `test/reader-state.test.ts` |
@@ -28,7 +28,7 @@ Before tagging v0.1, the final integration commit must have a green CI run with 
 - Replace the all-zero D1 `database_id` placeholder with the production/test D1 database ID.
 - Create/bind the `rss-sync-refresh` Queue.
 - Apply all D1 migrations to the target database.
-- Configure `READER_USERNAME`, `READER_TOKEN`, and `ADMIN_TOKEN` as secrets.
+- Configure `USERNAME` and `PASSWORD` as secrets; Reader and Admin share `PASSWORD`.
 - Keep `DAILY_DISPATCH_BUDGET` at the intended deployment value (default 1600 unless deliberately changed).
 - Set `REEDER_TRACE=1` only for the compatibility capture.
 - Deploy the exact commit being considered for release.
