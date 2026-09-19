@@ -127,7 +127,7 @@ describe("feed charset decoding", () => {
     );
     expect(result).toMatchObject({
       result: "failed",
-      title: null,
+      title: "https://unsupported-charset.example/feed.xml",
       errorClass: "unsupported_charset",
     });
   });
