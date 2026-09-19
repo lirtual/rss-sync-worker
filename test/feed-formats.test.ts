@@ -105,9 +105,7 @@ const refreshAndRead = async (
   );
   expect(outcome).toBe("processed");
 
-  const row = await env.DB.prepare(
-    "SELECT id FROM entries WHERE feed_id = ? ORDER BY id LIMIT 1",
-  )
+  const row = await env.DB.prepare("SELECT id FROM entries WHERE feed_id = ? ORDER BY id LIMIT 1")
     .bind(feedId)
     .first<{ id: number }>();
   if (row === null) throw new Error("expected persisted entry");
@@ -146,7 +144,8 @@ describe("feed format baseline", () => {
   }
 
   it("normalizes icon and enclosure candidates for downstream tickets", () => {
-    const rss = parseFeed(`<rss version="2.0"><channel><title>Media</title><link>https://media.example/</link>
+    const rss =
+      parseFeed(`<rss version="2.0"><channel><title>Media</title><link>https://media.example/</link>
 <image><url>https://media.example/icon.png</url></image>
 <item><guid>one</guid><title>One</title><enclosure url="https://media.example/a.mp3" type="audio/mpeg" length="42"/></item>
 </channel></rss>`);
@@ -160,7 +159,8 @@ describe("feed format baseline", () => {
       },
     ]);
 
-    const atom = parseFeed(`<feed><title>Atom Media</title><icon>https://atom-media.example/icon.png</icon>
+    const atom =
+      parseFeed(`<feed><title>Atom Media</title><icon>https://atom-media.example/icon.png</icon>
 <entry><id>one</id><title>One</title><link rel="enclosure" href="https://atom-media.example/a.mp4" type="video/mp4"/></entry>
 </feed>`);
     expect(atom.iconUrls).toEqual(["https://atom-media.example/icon.png"]);
