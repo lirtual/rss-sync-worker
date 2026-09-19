@@ -59,11 +59,7 @@ const htmlIconCandidates = (html: string, baseUrl: string): string[] => {
   for (const match of html.matchAll(/<link\b[^>]*>/giu)) {
     const attrs = attributes(match[0]);
     const rel = (attrs.get("rel") ?? "").toLowerCase().split(/\s+/u).filter(Boolean);
-    if (
-      !rel.includes("icon") &&
-      !rel.includes("shortcut") &&
-      !rel.includes("apple-touch-icon")
-    ) {
+    if (!rel.includes("icon") && !rel.includes("shortcut") && !rel.includes("apple-touch-icon")) {
       continue;
     }
     const href = attrs.get("href") ?? "";
@@ -118,20 +114,12 @@ const fetchIcon = async (
   }
 };
 
-const htmlCandidates = async (
-  siteUrl: string,
-  fetcher: typeof fetch,
-): Promise<string[]> => {
+const htmlCandidates = async (siteUrl: string, fetcher: typeof fetch): Promise<string[]> => {
   try {
-    const fetched = await fetchFeedDocument(
-      siteUrl,
-      { etag: null, lastModified: null },
-      fetcher,
-      {
-        maxBodyBytes: HTML_MAX_BYTES,
-        accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
-      },
-    );
+    const fetched = await fetchFeedDocument(siteUrl, { etag: null, lastModified: null }, fetcher, {
+      maxBodyBytes: HTML_MAX_BYTES,
+      accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+    });
     if (fetched.status !== "fetched" || fetched.body === null) return [];
     const type = fetched.contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
     if (type !== "" && type !== "text/html" && type !== "application/xhtml+xml") return [];
@@ -217,9 +205,7 @@ export const refreshFeedIcon = async (
     return false;
   };
 
-  const declared = parsed.iconUrls.map((raw) =>
-    resolvePublicUrl(raw, siteUrl ?? finalFeedUrl),
-  );
+  const declared = parsed.iconUrls.map((raw) => resolvePublicUrl(raw, siteUrl ?? finalFeedUrl));
   if (await storeFirstFound(declared)) return;
 
   if (siteUrl !== null) {
