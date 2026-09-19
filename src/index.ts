@@ -1,5 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import { discoverFeed } from "./feed/discovery";
+import { FeedFetchError } from "./feed/fetch";
 import {
   deleteFoldersAndReassign,
   findFolderByName,
@@ -9,8 +11,6 @@ import {
   replaceFolderMembership,
   updateSubscription,
 } from "./folder-store";
-import { discoverFeed } from "./feed/discovery";
-import { FeedFetchError } from "./feed/fetch";
 import { type MarkAllScope, markStreamRead } from "./mark-all-store";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
 import {
