@@ -337,12 +337,34 @@ export const persistSuccessfulRefresh = async (
       contentHtml: string | null;
       contentHash: string | null;
       bytes: number;
+      enclosures: Array<{
+        url: string;
+        mimeType: string | null;
+        lengthBytes: number | null;
+        title: string | null;
+      }>;
     }
   >();
 
   for (const entry of parsed.entries) {
     const key = await identityKey(entry, fetchedFeed.canonicalFeedUrl);
     const url = canonicalizeEntryUrl(entry.url, fetchedFeed.canonicalFeedUrl);
+    const enclosures = entry.enclosures.flatMap((enclosure) => {
+      const enclosureUrl = canonicalizeEntryUrl(
+        enclosure.url,
+        url ?? fetchedFeed.canonicalFeedUrl,
+      );
+      return enclosureUrl === null
+        ? []
+        : [
+            {
+              url: enclosureUrl,
+              mimeType: enclosure.mimeType,
+              lengthBytes: enclosure.lengthBytes,
+              title: enclosure.title,
+            },
+          ];
+    });
     const bytes = new TextEncoder().encode(entry.contentHtml).byteLength;
     const contentStatus =
       bytes === 0 ? "empty" : bytes > MAX_ENTRY_CONTENT_BYTES ? "oversized" : "stored";
@@ -358,6 +380,7 @@ export const persistSuccessfulRefresh = async (
       contentHtml: contentStatus === "stored" ? entry.contentHtml : null,
       contentHash: contentStatus === "stored" ? await sha256Hex(entry.contentHtml) : null,
       bytes,
+      enclosures,
     });
   }
 
@@ -386,8 +409,13 @@ export const persistSuccessfulRefresh = async (
   };
 
   const metadataRecords = prepared.map(
-    ({ contentHtml: _contentHtml, contentHash: _contentHash, bytes: _bytes, ...metadata }) =>
-      metadata,
+    ({
+      contentHtml: _contentHtml,
+      contentHash: _contentHash,
+      bytes: _bytes,
+      enclosures: _enclosures,
+      ...metadata
+    }) => metadata,
   );
   const entrySql = `INSERT INTO entries (
       feed_id, identity_key, source_id, title, url, author, published_at,
@@ -437,6 +465,49 @@ export const persistSuccessfulRefresh = async (
       .prepare(stateSql)
       .bind(bootstrapRead ? 1 : 0, now, chunk, feed.id)
       .run();
+  }
+
+  const observedIdentityRecords = prepared.map((record) => ({
+    identityKey: record.identityKey,
+  }));
+  for (const chunk of jsonChunks(observedIdentityRecords)) {
+    await db
+      .prepare(
+        `DELETE FROM entry_enclosures
+         WHERE entry_id IN (
+           SELECT e.id
+           FROM json_each(?) AS j
+           JOIN entries e
+             ON e.feed_id = ?
+            AND e.identity_key = json_extract(j.value, '$.identityKey')
+         )`,
+      )
+      .bind(chunk, feed.id)
+      .run();
+  }
+
+  const enclosureRecords = prepared.flatMap((record) =>
+    record.enclosures.map((enclosure, position) => ({
+      identityKey: record.identityKey,
+      position,
+      ...enclosure,
+    })),
+  );
+  const enclosureSql = `INSERT INTO entry_enclosures (
+      entry_id, position, url, mime_type, length_bytes, title
+    )
+    SELECT e.id,
+           json_extract(j.value, '$.position'),
+           json_extract(j.value, '$.url'),
+           json_extract(j.value, '$.mimeType'),
+           json_extract(j.value, '$.lengthBytes'),
+           json_extract(j.value, '$.title')
+    FROM json_each(?) AS j
+    JOIN entries e
+      ON e.feed_id = ?
+     AND e.identity_key = json_extract(j.value, '$.identityKey')`;
+  for (const chunk of jsonChunks(enclosureRecords)) {
+    await db.prepare(enclosureSql).bind(chunk, feed.id).run();
   }
 
   const identityPayload = JSON.stringify(
