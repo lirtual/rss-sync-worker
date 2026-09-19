@@ -350,10 +350,7 @@ export const persistSuccessfulRefresh = async (
     const key = await identityKey(entry, fetchedFeed.canonicalFeedUrl);
     const url = canonicalizeEntryUrl(entry.url, fetchedFeed.canonicalFeedUrl);
     const enclosures = entry.enclosures.flatMap((enclosure) => {
-      const enclosureUrl = canonicalizeEntryUrl(
-        enclosure.url,
-        url ?? fetchedFeed.canonicalFeedUrl,
-      );
+      const enclosureUrl = canonicalizeEntryUrl(enclosure.url, url ?? fetchedFeed.canonicalFeedUrl);
       return enclosureUrl === null
         ? []
         : [
