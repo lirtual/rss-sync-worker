@@ -130,27 +130,62 @@ const htmlCandidates = async (siteUrl: string, fetcher: typeof fetch): Promise<s
   }
 };
 
-const persistMissing = async (
+const persistFound = async (
   db: D1Database,
   feedId: number,
   externalId: string,
+  icon: { sourceUrl: string; mediaType: string; body: Uint8Array; etag: string },
   now: number,
 ): Promise<void> => {
   await db
     .prepare(
       `INSERT INTO feed_icons (
          feed_id, external_id, status, source_url, media_type, body, etag, checked_at, expires_at
-       ) VALUES (?, ?, 'missing', NULL, NULL, NULL, NULL, ?, ?)
+       ) VALUES (?, ?, 'found', ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(feed_id) DO UPDATE SET
+         status = 'found',
+         source_url = excluded.source_url,
+         media_type = excluded.media_type,
+         body = excluded.body,
+         etag = excluded.etag,
+         checked_at = excluded.checked_at,
+         expires_at = excluded.expires_at`,
+    )
+    .bind(
+      feedId,
+      externalId,
+      icon.sourceUrl,
+      icon.mediaType,
+      icon.body,
+      icon.etag,
+      now,
+      now + FOUND_TTL_MS,
+    )
+    .run();
+};
+
+const persistMissing = async (
+  db: D1Database,
+  feedId: number,
+  externalId: string,
+  retrySourceUrl: string | null,
+  now: number,
+): Promise<void> => {
+  await db
+    .prepare(
+      `INSERT INTO feed_icons (
+         feed_id, external_id, status, source_url, media_type, body, etag, checked_at, expires_at
+       ) VALUES (?, ?, 'missing', ?, NULL, NULL, NULL, ?, ?)
        ON CONFLICT(feed_id) DO UPDATE SET
          status = 'missing',
-         source_url = NULL,
+         source_url = excluded.source_url,
          media_type = NULL,
          body = NULL,
          etag = NULL,
          checked_at = excluded.checked_at,
          expires_at = excluded.expires_at`,
     )
-    .bind(feedId, externalId, now, now + MISSING_TTL_MS)
+    .bind(feedId, externalId, retrySourceUrl, now, now + MISSING_TTL_MS)
     .run();
 };
 
@@ -168,38 +203,16 @@ export const refreshFeedIcon = async (
   const externalId = existing?.externalId ?? crypto.randomUUID();
   const siteUrl = parsed.siteUrl === null ? null : resolvePublicUrl(parsed.siteUrl, finalFeedUrl);
   const seen = new Set<string>();
+  let retrySourceUrl: string | null = existing?.sourceUrl ?? null;
 
   const storeFirstFound = async (rawCandidates: Array<string | null>): Promise<boolean> => {
     for (const candidate of rawCandidates) {
       if (candidate === null || seen.has(candidate)) continue;
       seen.add(candidate);
+      retrySourceUrl ??= candidate;
       const icon = await fetchIcon(candidate, fetcher);
       if (icon === null) continue;
-      await db
-        .prepare(
-          `INSERT INTO feed_icons (
-             feed_id, external_id, status, source_url, media_type, body, etag, checked_at, expires_at
-           ) VALUES (?, ?, 'found', ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(feed_id) DO UPDATE SET
-             status = 'found',
-             source_url = excluded.source_url,
-             media_type = excluded.media_type,
-             body = excluded.body,
-             etag = excluded.etag,
-             checked_at = excluded.checked_at,
-             expires_at = excluded.expires_at`,
-        )
-        .bind(
-          feedId,
-          externalId,
-          icon.sourceUrl,
-          icon.mediaType,
-          icon.body,
-          icon.etag,
-          now,
-          now + FOUND_TTL_MS,
-        )
-        .run();
+      await persistFound(db, feedId, externalId, icon, now);
       return true;
     }
     return false;
@@ -221,7 +234,62 @@ export const refreshFeedIcon = async (
   }
   if (await storeFirstFound([fallback])) return;
 
-  await persistMissing(db, feedId, externalId, now);
+  await persistMissing(db, feedId, externalId, retrySourceUrl, now);
+};
+
+export const refreshExpiredFeedIcon = async (
+  db: D1Database,
+  feedId: number,
+  now: number,
+  fetcher: typeof fetch = fetch,
+): Promise<void> => {
+  const existing = await loadCache(db, feedId);
+  if (existing === null || existing.expiresAt > now) return;
+
+  const feed = await db
+    .prepare(
+      `SELECT canonical_feed_url AS canonicalFeedUrl, site_url AS siteUrl
+       FROM feeds
+       WHERE id = ?`,
+    )
+    .bind(feedId)
+    .first<{ canonicalFeedUrl: string; siteUrl: string | null }>();
+  if (feed === null) return;
+
+  const externalId = existing.externalId;
+  const seen = new Set<string>();
+  let retrySourceUrl = existing.sourceUrl;
+  const storeFirstFound = async (rawCandidates: Array<string | null>): Promise<boolean> => {
+    for (const candidate of rawCandidates) {
+      if (candidate === null || seen.has(candidate)) continue;
+      seen.add(candidate);
+      retrySourceUrl ??= candidate;
+      const icon = await fetchIcon(candidate, fetcher);
+      if (icon === null) continue;
+      await persistFound(db, feedId, externalId, icon, now);
+      return true;
+    }
+    return false;
+  };
+
+  if (await storeFirstFound([existing.sourceUrl])) return;
+
+  const siteUrl =
+    feed.siteUrl === null ? null : resolvePublicUrl(feed.siteUrl, feed.canonicalFeedUrl);
+  if (siteUrl !== null) {
+    const discovered = await htmlCandidates(siteUrl, fetcher);
+    if (await storeFirstFound(discovered)) return;
+  }
+
+  let fallback: string | null = null;
+  try {
+    fallback = new URL("/favicon.ico", siteUrl ?? feed.canonicalFeedUrl).toString();
+  } catch {
+    fallback = null;
+  }
+  if (await storeFirstFound([fallback])) return;
+
+  await persistMissing(db, feedId, externalId, retrySourceUrl, now);
 };
 
 export const readFeedIcon = async (

@@ -118,6 +118,39 @@ describe("Reader item metadata semantics", () => {
     );
   });
 
+  it("uses publication time for timestampUsec and ingestion time for crawlTimeMsec", async () => {
+    const now = 1_780_200_000_000;
+    const feedId = await ensureSubscription(env.DB, "https://timestamp.example/feed.xml", now);
+    const dispatch = await claimDispatch(env.DB, feedId, now);
+    if (dispatch === null) throw new Error("expected dispatch");
+
+    const published = "Wed, 16 Sep 2026 12:00:00 GMT";
+    await processRefreshMessage(
+      env,
+      dispatch,
+      now + 1,
+      async () =>
+        new Response(
+          `<rss version="2.0"><channel><title>Timestamps</title><link>https://timestamp.example/</link>
+<item><guid>one</guid><title>One</title><link>https://timestamp.example/one</link><pubDate>${published}</pubDate></item>
+</channel></rss>`,
+          { status: 200 },
+        ),
+    );
+
+    const row = await env.DB.prepare(
+      "SELECT id, published_at AS publishedAt, ingested_at AS ingestedAt FROM entries WHERE feed_id = ?",
+    )
+      .bind(feedId)
+      .first<{ id: number; publishedAt: number; ingestedAt: number }>();
+    if (row === null) throw new Error("expected entry");
+
+    const item = await readerItem(row.id);
+    expect(item.timestampUsec).toBe(String(row.publishedAt * 1_000));
+    expect(item.crawlTimeMsec).toBe(String(row.ingestedAt));
+    expect(item.published).toBe(Math.floor(row.publishedAt / 1_000));
+  });
+
   it("advances effective updated time for content-only edits without resetting state", async () => {
     const now = 1_780_100_000_000;
     const feedId = await ensureSubscription(env.DB, "https://content-update.example/feed.xml", now);
@@ -148,6 +181,12 @@ describe("Reader item metadata semantics", () => {
 
     const before = await readerItem(entry.id);
     const beforeUpdated = before.updated as number;
+    const beforeRow = await env.DB.prepare(
+      "SELECT updated_at AS updatedAt FROM entries WHERE id = ?",
+    )
+      .bind(entry.id)
+      .first<{ updatedAt: number }>();
+    if (beforeRow === null) throw new Error("expected entry metadata");
 
     const second = await claimDispatch(env.DB, feedId, now + 5_000);
     if (second === null) throw new Error("expected second dispatch");
@@ -159,6 +198,13 @@ describe("Reader item metadata semantics", () => {
     );
 
     const after = await readerItem(entry.id);
+    const afterRow = await env.DB.prepare(
+      "SELECT updated_at AS updatedAt FROM entries WHERE id = ?",
+    )
+      .bind(entry.id)
+      .first<{ updatedAt: number }>();
+    if (afterRow === null) throw new Error("expected updated entry metadata");
+    expect(afterRow.updatedAt).toBeGreaterThan(beforeRow.updatedAt);
     expect(after.updated as number).toBeGreaterThan(beforeUpdated);
     expect((after.content as { content: string }).content).toContain("Second");
     expect(after.categories).toEqual(

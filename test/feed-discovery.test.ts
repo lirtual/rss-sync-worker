@@ -73,6 +73,40 @@ describe("feed discovery", () => {
     });
   });
 
+  it("enforces the HTML size limit from response metadata before accepting a short body", async () => {
+    const fetcher = (async () =>
+      new Response("<html><head></head><body>short</body></html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/html",
+          "content-length": String(1024 * 1024 + 1),
+        },
+      })) as typeof fetch;
+
+    await expect(
+      discoverFeed("https://declared-large-html.example/", fetcher),
+    ).rejects.toMatchObject({
+      code: "response_too_large",
+    });
+  });
+
+  it("sniffs mislabeled HTML and still applies the one MiB transport cap", async () => {
+    const fetcher = (async () =>
+      new Response("<html><head></head><body>short</body></html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/plain",
+          "content-length": String(1024 * 1024 + 1),
+        },
+      })) as typeof fetch;
+
+    await expect(
+      discoverFeed("https://mislabeled-large-html.example/", fetcher),
+    ).rejects.toMatchObject({
+      code: "response_too_large",
+    });
+  });
+
   it("rejects discovery HTML larger than one MiB", async () => {
     const html = `<html><head></head><body>${"x".repeat(1024 * 1024)}</body></html>`;
     const fetcher = (async () => response(html, "text/html")) as typeof fetch;
