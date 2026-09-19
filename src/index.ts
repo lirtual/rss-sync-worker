@@ -9,6 +9,8 @@ import {
   replaceFolderMembership,
   updateSubscription,
 } from "./folder-store";
+import { discoverFeed } from "./feed/discovery";
+import { FeedFetchError } from "./feed/fetch";
 import { type MarkAllScope, markStreamRead } from "./mark-all-store";
 import { decodeContinuation, encodeContinuation, googleEntry, parseItemId } from "./protocol";
 import {
@@ -281,8 +283,13 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
       return context.json({ error_message: "invalid URL" }, 400, jsonHeaders);
     }
 
+    const discovered = await discoverFeed(requestedUrl);
+    if (discovered === null) {
+      return context.json({ numResults: 0, query: requestedUrl }, 200, jsonHeaders);
+    }
+
     const now = Date.now();
-    const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
+    const feedId = await ensureSubscription(context.env.DB, discovered.feedUrl, now);
     const meta = await context.env.DB.prepare(
       `SELECT f.canonical_feed_url AS feedUrl,
               f.title AS feedTitle,
@@ -295,8 +302,13 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
       .first<{ feedUrl: string; feedTitle: string | null; customTitle: string | null }>();
     await enqueueFeedRefresh(context.env, feedId, now);
 
-    const canonicalUrl = meta?.feedUrl ?? requestedUrl;
-    const streamName = meta?.customTitle?.trim() || meta?.feedTitle?.trim() || canonicalUrl;
+    const canonicalUrl = meta?.feedUrl ?? discovered.feedUrl;
+    const storedTitle = meta?.feedTitle?.trim();
+    const streamName =
+      meta?.customTitle?.trim() ||
+      (storedTitle !== undefined && storedTitle !== canonicalUrl ? storedTitle : "") ||
+      discovered.title ||
+      canonicalUrl;
     return context.json(
       { numResults: 1, query: canonicalUrl, streamId: `feed/${feedId}`, streamName },
       200,
@@ -304,7 +316,13 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "subscription failed";
-    const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
+    const status =
+      error instanceof FeedFetchError &&
+      (error.code === "invalid_url" ||
+        error.code === "unsafe_target" ||
+        error.code === "response_too_large")
+        ? 400
+        : 503;
     return context.json({ error_message: message }, status, jsonHeaders);
   }
 });
