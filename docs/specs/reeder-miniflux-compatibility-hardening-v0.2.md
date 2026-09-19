@@ -1,6 +1,6 @@
 # Reeder / Miniflux Compatibility Hardening v0.2 Technical Specification
 
-- Status: Ready for ticketing
+- Status: Implementation in progress
 - Date: 2026-09-19
 - Repository: lirtual/rss-sync-worker
 - Base: main at 987cc87395ce659132cc0e8ff73c08573aa8b587
