@@ -43,7 +43,9 @@ const normalizeItem = (value: Record<string, unknown>) => ({
 });
 
 const normalizeItems = (items: Array<Record<string, unknown>>) =>
-  items.map(normalizeItem).sort((left, right) => String(left.title).localeCompare(String(right.title)));
+  items
+    .map(normalizeItem)
+    .sort((left, right) => String(left.title).localeCompare(String(right.title)));
 
 describe("Reeder v0.2 value-level golden contract", () => {
   it("locks subscription, item, icon, folder, enclosure and unread values", async () => {
