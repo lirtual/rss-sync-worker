@@ -1,11 +1,19 @@
 const GOOGLE_ITEM_PREFIX = "tag:google.com,2005:reader/item/";
 
+export interface ReaderEnclosure {
+  url: string;
+  mimeType: string | null;
+  lengthBytes: number | null;
+  title: string | null;
+}
+
 export interface ReaderEntry {
   id: number;
   feedId: number;
   feedTitle: string;
   feedSiteUrl: string | null;
   folderNames: string[];
+  enclosures: ReaderEnclosure[];
   title: string;
   url: string | null;
   author: string | null;
@@ -111,6 +119,10 @@ export const googleEntry = (entry: ReaderEntry) => {
         : { htmlUrl: entry.feedSiteUrl }),
     },
     categories,
+    enclosure: entry.enclosures.map((item) => ({
+      url: item.url,
+      ...(item.mimeType === null || item.mimeType === "" ? {} : { type: item.mimeType }),
+    })),
     ...(entry.author === null || entry.author === "" ? {} : { author: entry.author }),
   };
 };
