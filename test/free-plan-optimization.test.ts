@@ -36,6 +36,18 @@ describe("free-plan quota and dispatch reliability", () => {
       "SELECT dispatches_today AS used FROM service_state WHERE id = 1",
     ).first<{ used: number }>();
     expect(used?.used).toBe(1);
+
+    // A delivery that was accepted before its response was lost must still
+    // commit exactly once. Replaying its token must be harmless.
+    if (!token?.token) throw new Error("expected an active dispatch token");
+    const message: RefreshMessage = {
+      feedId,
+      dispatchToken: token.token,
+      dispatchedAt: now,
+    };
+    const fetcher = async (): Promise<Response> => new Response(null, { status: 304 });
+    expect(await processRefreshMessage(env, message, now + 1, fetcher)).toBe("not-modified");
+    expect(await processRefreshMessage(env, message, now + 2, fetcher)).toBe("stale");
   });
 
   it("does not refund a slot across UTC days and limits success heartbeats", async () => {
