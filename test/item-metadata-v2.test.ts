@@ -55,7 +55,7 @@ const editTitle = async (feedId: number, title: string) =>
 
 describe("Reader item metadata semantics", () => {
   it("uses custom source title and stable empty metadata fields across both contents endpoints", async () => {
-    const now = 1_860_000_000_000;
+    const now = 1_780_000_000_000;
     const feedId = await ensureSubscription(env.DB, "https://metadata-v2.example/feed.xml", now);
     const dispatch = await claimDispatch(env.DB, feedId, now);
     if (dispatch === null) throw new Error("expected dispatch");
@@ -119,7 +119,7 @@ describe("Reader item metadata semantics", () => {
   });
 
   it("advances effective updated time for content-only edits without resetting state", async () => {
-    const now = 1_860_100_000_000;
+    const now = 1_780_100_000_000;
     const feedId = await ensureSubscription(env.DB, "https://content-update.example/feed.xml", now);
     const first = await claimDispatch(env.DB, feedId, now);
     if (first === null) throw new Error("expected dispatch");
