@@ -95,7 +95,7 @@ export const googleEntry = (entry: ReaderEntry) => {
   return {
     id: googleItemTag(entry.id),
     title: entry.title,
-    timestampUsec: String(entry.ingestedAt * 1_000),
+    timestampUsec: String(publishedAt * 1_000),
     crawlTimeMsec: String(entry.ingestedAt),
     published: Math.floor(publishedAt / 1_000),
     updated: Math.floor((entry.sourceUpdatedAt ?? entry.updatedAt) / 1_000),

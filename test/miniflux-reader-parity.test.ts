@@ -1,6 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import { parseItemId } from "../src/protocol";
+import { parseFeed } from "../src/feed/parser";
+import { googleEntry, parseItemId, type ReaderEntry } from "../src/protocol";
 import { ensureSubscription } from "../src/store";
 
 const root = "https://rss-sync.test/api/reader/reader/api/0";
@@ -154,5 +155,71 @@ describe("pinned Miniflux Google Reader baseline", () => {
     const post = await postReader("friend/edit", []);
     expect(post.status).toBe(200);
     expect(await post.json()).toEqual([]);
+  });
+});
+
+describe("Reeder article time semantics", () => {
+  it("preserves publisher pubDate separately from first ingestion time", () => {
+    const xml = `<?xml version="1.0"?>
+<rss version="2.0"><channel><title>爱范儿</title>
+<item><guid>1680982</guid><title>iPhone 18</title>
+<pubDate>Sat, 19 Sep 2026 04:00:24 +0000</pubDate></item>
+<item><guid>1680956</guid><title>早报</title>
+<pubDate>Sat, 19 Sep 2026 00:59:13 +0000</pubDate></item>
+</channel></rss>`;
+    const parsed = parseFeed(xml);
+    const entryBase: ReaderEntry = {
+      id: 1,
+      feedId: 1,
+      feedTitle: "爱范儿",
+      feedSiteUrl: null,
+      folderNames: [],
+      title: "Article",
+      url: null,
+      author: null,
+      publishedAt: null,
+      sourceUpdatedAt: null,
+      ingestedAt: Date.parse("2026-09-19T01:20:00.000Z"),
+      updatedAt: Date.parse("2026-09-19T01:20:00.000Z"),
+      contentHtml: "",
+      isRead: 0,
+      isStarred: 0,
+    };
+
+    for (const [index, expectedIso] of [
+      "2026-09-19T04:00:24.000Z",
+      "2026-09-19T00:59:13.000Z",
+    ].entries()) {
+      const publishedAt = parsed.entries[index]?.publishedAt;
+      expect(publishedAt).toBe(Date.parse(expectedIso));
+      const item = googleEntry({ ...entryBase, publishedAt });
+      expect(item.published).toBe(Math.floor(Date.parse(expectedIso) / 1_000));
+      expect(item.timestampUsec).toBe(String(Date.parse(expectedIso) * 1_000));
+      expect(item.crawlTimeMsec).toBe(String(entryBase.ingestedAt));
+    }
+  });
+
+  it("falls back to first ingestion time when the publisher has no date", () => {
+    const ingestedAt = Date.parse("2026-09-19T01:20:00.000Z");
+    const item = googleEntry({
+      id: 2,
+      feedId: 1,
+      feedTitle: "Undated feed",
+      feedSiteUrl: null,
+      folderNames: [],
+      title: "Undated article",
+      url: null,
+      author: null,
+      publishedAt: null,
+      sourceUpdatedAt: null,
+      ingestedAt,
+      updatedAt: ingestedAt,
+      contentHtml: "",
+      isRead: 0,
+      isStarred: 0,
+    });
+    expect(item.timestampUsec).toBe(String(ingestedAt * 1_000));
+    expect(item.published).toBe(Math.floor(ingestedAt / 1_000));
+    expect(item.crawlTimeMsec).toBe(String(ingestedAt));
   });
 });
