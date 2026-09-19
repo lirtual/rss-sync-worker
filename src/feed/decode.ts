@@ -81,7 +81,7 @@ export const decodeFeedDocument = (
   const requested = detectedCharset(bytes, contentType);
   let decoder: TextDecoder;
   try {
-    decoder = new TextDecoder(requested, { fatal: true });
+    decoder = new TextDecoder(requested, { fatal: true, ignoreBOM: false });
   } catch {
     throw new FeedDecodeError("unsupported_charset", `unsupported feed charset: ${requested}`);
   }
