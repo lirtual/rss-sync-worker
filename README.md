@@ -6,17 +6,20 @@ The project intentionally provides **no web reader UI**. Reeder is the reading i
 
 It does **not** claim full Google Reader API compatibility. See [`docs/reeder-compatibility.md`](docs/reeder-compatibility.md) for the exact supported surface.
 
-## v0.1 capabilities
+## v0.2 compatibility capabilities
 
-- RSS 2.0 and Atom fetching
+- RSS 2.0, RSS 1.0/RDF, Atom 1.0, Atom 0.3, JSON Feed 1.0/1.1, and declared legacy charset decoding
 - D1-backed Feed, Entry, content, folder, and explicit read/starred state
 - first-bootstrap history marked read; later new entries unread
 - Google Reader-compatible Reeder login and synchronization subset
 - stable keyset pagination and Google Reader item-ID forms used by the contract
 - read/unread/kept-unread and star/unstar mutations
 - correct server-side Feed/Folder/global `mark-all-as-read`
-- subscription add/edit/unsubscribe/resubscribe and many-to-many folders
+- subscription add/edit/unsubscribe/resubscribe, bounded webpage-to-feed discovery, and many-to-many folders
 - conditional HTTP, bounded redirects, retry/backoff, permanent URL migration, duplicate-delivery safety
+- D1-backed feed icons exposed through `subscription/list.iconUrl` and a bounded public icon endpoint
+- RSS/Atom/JSON Feed enclosure persistence and stable Reeder attachment metadata
+- custom subscription titles and stable item metadata/content-update semantics
 - Admin OPML import/export without a Web UI
 - protected operational status/feed diagnostics and Queue-backed manual refresh
 - bounded 90-day cleanup of read + unstarred entries only
@@ -26,7 +29,7 @@ It does **not** claim full Google Reader API compatibility. See [`docs/reeder-co
 ## Architecture
 
 ```text
-RSS / Atom publishers
+RSS / Atom / JSON Feed publishers
         ↓
 Cloudflare Cron → Queue → Worker fetch/parse → D1
                                       ↑
@@ -54,6 +57,7 @@ The exact protocol endpoints, supported streams, limits, and unsupported behavio
 Public:
 
 - `GET /health`
+- `GET /feed-icon/:external-id` — cached feed icon bytes with ETag/cache headers
 
 Admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`:
 
@@ -114,18 +118,19 @@ npm run check
 
 ## Release status
 
-Automated tests are necessary but not sufficient for v0.1 release. The final candidate must also pass the complete flow against a **real Reeder client**, and that actual request sequence must be captured as sanitized regression fixtures.
+Automated tests are necessary but not sufficient for the v0.2 compatibility release. The final candidate must also pass the complete flow against a **real Reeder client**, and that actual request sequence must be captured as a sanitized regression fixture.
 
-See [`docs/release-v0.1.md`](docs/release-v0.1.md). Until that checklist is complete, do not label the implementation as released v0.1.
+See [`docs/release-v0.2.md`](docs/release-v0.2.md). Until that checklist is complete, treat v0.2 as implementation-complete rather than released.
 
 ## Design documents
 
 - [`CONTEXT.md`](CONTEXT.md) — canonical domain vocabulary
 - [`docs/specs/rss-sync-worker-v0.1.md`](docs/specs/rss-sync-worker-v0.1.md) — approved technical specification
 - [`docs/reeder-compatibility.md`](docs/reeder-compatibility.md) — exact Reader compatibility surface
-- [`docs/release-v0.1.md`](docs/release-v0.1.md) — automated/manual release evidence checklist
+- [`docs/release-v0.2.md`](docs/release-v0.2.md) — current automated/manual compatibility release gate
+- [`docs/release-v0.1.md`](docs/release-v0.1.md) — historical v0.1 release gate
 - [`docs/adr/`](docs/adr/) — architectural decision records
 
-## Explicit non-goals for v0.1
+## Explicit non-goals for v0.2
 
-No web UI, multi-user account system, Fever API, complete Google Reader API, generic website feed discovery, webpage full-text extraction, AI features, image pipeline, search/sharing/annotations, or generalized application-level workflow engine.
+No web UI, multi-user account system, Fever API, complete Google Reader API, webpage full-text extraction, media proxy, image transformation pipeline, AI features, search/sharing/annotations, or generalized application-level workflow engine.
