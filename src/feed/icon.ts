@@ -179,58 +179,61 @@ export const refreshFeedIcon = async (
 
   const externalId = existing?.externalId ?? crypto.randomUUID();
   const siteUrl = parsed.siteUrl === null ? null : resolvePublicUrl(parsed.siteUrl, finalFeedUrl);
-  const candidates: string[] = [];
   const seen = new Set<string>();
 
-  const add = (candidate: string | null) => {
-    if (candidate !== null && !seen.has(candidate)) {
+  const storeFirstFound = async (rawCandidates: Array<string | null>): Promise<boolean> => {
+    for (const candidate of rawCandidates) {
+      if (candidate === null || seen.has(candidate)) continue;
       seen.add(candidate);
-      candidates.push(candidate);
+      const icon = await fetchIcon(candidate, fetcher);
+      if (icon === null) continue;
+      await db
+        .prepare(
+          `INSERT INTO feed_icons (
+             feed_id, external_id, status, source_url, media_type, body, etag, checked_at, expires_at
+           ) VALUES (?, ?, 'found', ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(feed_id) DO UPDATE SET
+             status = 'found',
+             source_url = excluded.source_url,
+             media_type = excluded.media_type,
+             body = excluded.body,
+             etag = excluded.etag,
+             checked_at = excluded.checked_at,
+             expires_at = excluded.expires_at`,
+        )
+        .bind(
+          feedId,
+          externalId,
+          icon.sourceUrl,
+          icon.mediaType,
+          icon.body,
+          icon.etag,
+          now,
+          now + FOUND_TTL_MS,
+        )
+        .run();
+      return true;
     }
+    return false;
   };
 
-  for (const raw of parsed.iconUrls) {
-    add(resolvePublicUrl(raw, siteUrl ?? finalFeedUrl));
-  }
+  const declared = parsed.iconUrls.map((raw) =>
+    resolvePublicUrl(raw, siteUrl ?? finalFeedUrl),
+  );
+  if (await storeFirstFound(declared)) return;
+
   if (siteUrl !== null) {
-    for (const candidate of await htmlCandidates(siteUrl, fetcher)) add(candidate);
-  }
-  try {
-    add(new URL("/favicon.ico", siteUrl ?? finalFeedUrl).toString());
-  } catch {
-    // Ignore invalid fallback bases.
+    const discovered = await htmlCandidates(siteUrl, fetcher);
+    if (await storeFirstFound(discovered)) return;
   }
 
-  for (const candidate of candidates) {
-    const icon = await fetchIcon(candidate, fetcher);
-    if (icon === null) continue;
-    await db
-      .prepare(
-        `INSERT INTO feed_icons (
-           feed_id, external_id, status, source_url, media_type, body, etag, checked_at, expires_at
-         ) VALUES (?, ?, 'found', ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(feed_id) DO UPDATE SET
-           status = 'found',
-           source_url = excluded.source_url,
-           media_type = excluded.media_type,
-           body = excluded.body,
-           etag = excluded.etag,
-           checked_at = excluded.checked_at,
-           expires_at = excluded.expires_at`,
-      )
-      .bind(
-        feedId,
-        externalId,
-        icon.sourceUrl,
-        icon.mediaType,
-        icon.body,
-        icon.etag,
-        now,
-        now + FOUND_TTL_MS,
-      )
-      .run();
-    return;
+  let fallback: string | null = null;
+  try {
+    fallback = new URL("/favicon.ico", siteUrl ?? finalFeedUrl).toString();
+  } catch {
+    fallback = null;
   }
+  if (await storeFirstFound([fallback])) return;
 
   await persistMissing(db, feedId, externalId, now);
 };
