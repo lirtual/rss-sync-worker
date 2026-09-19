@@ -72,7 +72,8 @@ describe("Reader item metadata semantics", () => {
         env,
         dispatch,
         now + 1,
-        async () => new Response(body, { status: 200, headers: { "content-type": "application/rss+xml" } }),
+        async () =>
+          new Response(body, { status: 200, headers: { "content-type": "application/rss+xml" } }),
       ),
     ).toBe("processed");
 
@@ -123,7 +124,9 @@ describe("Reader item metadata semantics", () => {
     const first = await claimDispatch(env.DB, feedId, now);
     if (first === null) throw new Error("expected dispatch");
 
-    const rss = (content: string) => `<rss version="2.0"><channel><title>Updates</title><link>https://content-update.example/</link>
+    const rss = (
+      content: string,
+    ) => `<rss version="2.0"><channel><title>Updates</title><link>https://content-update.example/</link>
 <item><guid>same</guid><title>Same</title><link>https://content-update.example/item</link><description><![CDATA[${content}]]></description></item>
 </channel></rss>`;
     await processRefreshMessage(
