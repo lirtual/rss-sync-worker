@@ -1,4 +1,6 @@
+import { decodeFeedDocument } from "./feed/decode";
 import { fetchFeedDocument } from "./feed/fetch";
+import { refreshExpiredFeedIcon, refreshFeedIcon } from "./feed/icon";
 import { parseFeed } from "./feed/parser";
 import {
   configuredDispatchBudget,
@@ -109,11 +111,28 @@ export const processRefreshMessage = async (
 
     if (fetched.status === "not-modified") {
       await persistNotModifiedRefresh(env.DB, feed, message, responseMeta, now);
+      try {
+        await refreshExpiredFeedIcon(env.DB, feed.id, now, fetcher);
+      } catch (error) {
+        console.warn("feed_icon_refresh_failed", {
+          feedId: feed.id,
+          errorClass: error instanceof Error ? error.name : "unknown",
+        });
+      }
       return "not-modified";
     }
 
-    const parsed = parseFeed(fetched.body ?? "");
+    const decoded = decodeFeedDocument(fetched.body ?? new Uint8Array(), fetched.contentType);
+    const parsed = parseFeed(decoded.text);
     await persistSuccessfulRefresh(env.DB, feed, message, parsed, responseMeta, now);
+    try {
+      await refreshFeedIcon(env.DB, feed.id, parsed, fetched.finalUrl, now, fetcher);
+    } catch (error) {
+      console.warn("feed_icon_refresh_failed", {
+        feedId: feed.id,
+        errorClass: error instanceof Error ? error.name : "unknown",
+      });
+    }
     return "processed";
   } catch (error) {
     await recordRefreshFailure(env.DB, feed, message, now, error);

@@ -34,7 +34,7 @@ Wire behavior follows Miniflux unless this document lists an intentional deviati
 | `GET /reader/api/0/token` | GoogleLogin header auth; plain token | Same |
 | `GET /reader/api/0/user-info` | JSON | Same |
 | `GET /reader/api/0/subscription/list?output=json` | `output=json` required | Same |
-| `POST /reader/api/0/subscription/quickadd` | discover/create, return non-empty `streamName` | Same response shape; creation/fetch is asynchronous |
+| `POST /reader/api/0/subscription/quickadd` | discover/create, return non-empty `streamName` | Same response shape; bounded direct-Feed validation/webpage discovery is synchronous, Feed refresh/persistence of entries is queued |
 | `POST /reader/api/0/subscription/edit` | subscribe/edit/unsubscribe; repeated `s` for unsubscribe; exact `OK` | Same |
 | `GET /reader/api/0/tag/list?output=json` | starred + labels; `output=json` required | Same |
 | `POST /reader/api/0/rename-tag` | rename label; missing source = 404; exact `OK` | Same |
@@ -42,7 +42,7 @@ Wire behavior follows Miniflux unless this document lists an intentional deviati
 | `GET /reader/api/0/stream/items/ids?output=json` | one `s`; n <= 10000; r/ot/nt/xt; continuation | Same filters; opaque keyset continuation |
 | `POST /reader/api/0/stream/items/contents` | `output=json`; repeated item IDs; r ordering | Same |
 | `POST /reader/api/0/edit-tag` | body-only a/r; read/unread/star/unstar; ignored broadcast/like; exact `OK` | Same |
-| `POST /reader/api/0/mark-all-as-read` | feed/label/reading-list; published-time cutoff; exact `OK` | Same, plus millisecond timestamp tolerance |
+| `POST /reader/api/0/mark-all-as-read` | feed/label/reading-list; published-time cutoff; exact `OK` | Same scopes/body, but cutoff uses service-owned ingestion time; seconds/milliseconds/microseconds accepted |
 | unknown `GET/POST /reader/api/0/*` | `[]`, HTTP 200 | Same |
 
 ## Authentication
@@ -106,24 +106,28 @@ These are deliberate and must remain tested:
    - Miniflux accepts seconds or microseconds.
    - rss-sync-worker also tolerates milliseconds because existing clients/tests use them.
 
-6. **Asynchronous subscription fetching**
+6. **Bounded quickadd discovery + asynchronous entry refresh**
    - Miniflux discovers/fetches synchronously during quickadd.
-   - rss-sync-worker creates/reactivates the subscription immediately, returns existing title or canonical URL as non-empty `streamName`, and queues refresh work.
+   - rss-sync-worker synchronously validates a direct Feed or performs bounded webpage Feed discovery before creating/reactivating the subscription.
+   - Entry ingestion remains Queue-backed; quickadd returns the discovered/effective title and Feed stream without waiting for full background refresh.
 
 ## Cloudflare Workers adapter invariants
 
 These are runtime adaptations, not wire-contract changes:
 
 - Feed response limit: 8 MiB.
-- Feed parse limit: first 250 RSS/Atom entries per fetch.
+- Feed parse limit: first 250 entries per fetch across RSS 2.0, RSS 1.0/RDF, Atom 1.0, Atom 0.3, and JSON Feed 1.0/1.1.
 - Queue fetch timeout: 30 seconds.
 - Redirect/error bodies are canceled promptly.
-- Response body decoding uses chunk collection + one final join.
+- Response bodies remain byte-first until bounded decoding. Charset precedence is BOM -> HTTP Content-Type -> XML declaration -> UTF-8 fallback; unsupported declared charsets fail explicitly.
 - D1 entry/content persistence is set-based using JSON1.
 - Bulk JSON payloads are chunked below 1.5 MiB.
 - No-op entry/content conflicts do not rewrite rows.
 - A normal 250-entry refresh must remain below the Workers Free D1 query-per-invocation budget.
 - Existing ETag/Last-Modified conditional fetch behavior remains enabled.
+- Feed icons are bounded to 256 KiB and use the same redirect/SSRF safety boundary.
+- Icon cache state lives in D1; no R2/KV/image service is required.
+- Normalized enclosure metadata is stored in D1 and exposed directly through Reader payloads.
 
 ## Production evidence
 
@@ -148,3 +152,8 @@ Every Miniflux endpoint above must have contract tests for:
 - timestamp and pagination semantics
 
 Every intentional deviation must have a dedicated test and a comment linking it to this document.
+
+
+## Intentional rss-sync-worker deviation: mark-all cutoff
+
+Bulk mark-all-as-read uses service-owned `entries.ingested_at` as the cutoff boundary rather than publisher-controlled publication time. An article first ingested after the user's cutoff remains unread even when its published date is older than the cutoff. This preserves the rss-sync-worker Reader State invariant and is intentionally not a byte-for-byte copy of Miniflux 2.3.3 behavior.

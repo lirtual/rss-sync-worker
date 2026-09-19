@@ -1,5 +1,8 @@
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
+import { discoverFeed } from "./feed/discovery";
+import { FeedFetchError } from "./feed/fetch";
+import { readFeedIcon } from "./feed/icon";
 import {
   deleteFoldersAndReassign,
   findFolderByName,
@@ -234,6 +237,22 @@ const parseMarkAllScope = (stream: string): MarkAllScope | null => {
 
 app.get("/health", (context) => context.json({ status: "ok", service: "rss-sync-worker" }));
 
+app.get("/feed-icon/:externalId", async (context) => {
+  const icon = await readFeedIcon(context.env.DB, context.req.param("externalId"));
+  if (icon === null) return new Response("Not Found", { status: 404 });
+
+  const headers = new Headers({
+    "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
+    "content-type": icon.mediaType,
+    etag: icon.etag,
+    "x-content-type-options": "nosniff",
+  });
+  if (context.req.header("If-None-Match") === icon.etag) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(icon.body, { status: 200, headers });
+});
+
 app.use("/admin/*", requireAdmin);
 app.get("/admin/status", (context) => context.json({ status: "ok" }, 200, jsonHeaders));
 
@@ -281,8 +300,13 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
       return context.json({ error_message: "invalid URL" }, 400, jsonHeaders);
     }
 
+    const discovered = await discoverFeed(requestedUrl);
+    if (discovered === null) {
+      return context.json({ numResults: 0, query: requestedUrl }, 200, jsonHeaders);
+    }
+
     const now = Date.now();
-    const feedId = await ensureSubscription(context.env.DB, requestedUrl, now);
+    const feedId = await ensureSubscription(context.env.DB, discovered.feedUrl, now);
     const meta = await context.env.DB.prepare(
       `SELECT f.canonical_feed_url AS feedUrl,
               f.title AS feedTitle,
@@ -295,8 +319,13 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
       .first<{ feedUrl: string; feedTitle: string | null; customTitle: string | null }>();
     await enqueueFeedRefresh(context.env, feedId, now);
 
-    const canonicalUrl = meta?.feedUrl ?? requestedUrl;
-    const streamName = meta?.customTitle?.trim() || meta?.feedTitle?.trim() || canonicalUrl;
+    const canonicalUrl = meta?.feedUrl ?? discovered.feedUrl;
+    const storedTitle = meta?.feedTitle?.trim();
+    const streamName =
+      meta?.customTitle?.trim() ||
+      (storedTitle !== undefined && storedTitle !== canonicalUrl ? storedTitle : "") ||
+      discovered.title ||
+      canonicalUrl;
     return context.json(
       { numResults: 1, query: canonicalUrl, streamId: `feed/${feedId}`, streamName },
       200,
@@ -304,7 +333,13 @@ app.post(`${readerRoot}/subscription/quickadd`, async (context) => {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "subscription failed";
-    const status = message.includes("feed URL") || message.includes("Invalid URL") ? 400 : 503;
+    const status =
+      error instanceof FeedFetchError &&
+      (error.code === "invalid_url" ||
+        error.code === "unsafe_target" ||
+        error.code === "response_too_large")
+        ? 400
+        : 503;
     return context.json({ error_message: message }, status, jsonHeaders);
   }
 });
@@ -333,7 +368,10 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
         htmlUrl: subscription.siteUrl ?? "",
         title: subscription.title,
         categories: categoriesByFeed.get(subscription.feedId) ?? [],
-        iconUrl: "",
+        iconUrl:
+          subscription.iconExternalId === null
+            ? ""
+            : `${new URL(context.req.url).origin}/feed-icon/${encodeURIComponent(subscription.iconExternalId)}`,
       })),
     },
     200,

@@ -1,5 +1,5 @@
 import { env, exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { processRefreshMessage } from "../src/refresh";
 import { claimDispatch, ensureSubscription } from "../src/store";
 
@@ -34,6 +34,10 @@ const feed = `<?xml version="1.0"?>
 <item><guid>parity-1</guid><title>Parity One</title><link>https://parity.example/1</link><description><![CDATA[<p>One</p>]]></description></item>
 <item><guid>parity-2</guid><title>Parity Two</title><link>https://parity.example/2</link><description><![CDATA[<p>Two</p>]]></description></item>
 </channel></rss>`;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("deployed Worker parity", () => {
   it("reproduces the deployed Reeder read-side surface from GitHub source", async () => {
@@ -118,6 +122,15 @@ describe("deployed Worker parity", () => {
   });
 
   it("reproduces deployed subscription response and URL-form subscribe behavior", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          `<rss version="2.0"><channel><title>https://quickadd.example/feed.xml</title><link>https://quickadd.example/</link></channel></rss>`,
+          { status: 200, headers: { "content-type": "application/rss+xml" } },
+        ),
+    );
+
     const quickadd = await postReader("subscription/quickadd", [
       ["quickadd", "https://quickadd.example/feed.xml"],
     ]);

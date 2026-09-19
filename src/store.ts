@@ -13,6 +13,7 @@ export interface SubscriptionView {
   feedUrl: string;
   siteUrl: string | null;
   title: string;
+  iconExternalId: string | null;
 }
 
 export interface DispatchedFeed {
@@ -63,6 +64,20 @@ const canonicalizeEntryUrl = (raw: string | null, feedUrl: string): string | nul
     return null;
   }
 };
+
+const normalizeContentUrls = (html: string, baseUrl: string): string =>
+  html.replace(
+    /(\s)(href|src|poster)\s*=\s*(["'])(.*?)\3/giu,
+    (_match, whitespace: string, attribute: string, quote: string, rawValue: string) => {
+      try {
+        const url = new URL(rawValue.trim(), baseUrl);
+        if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+        return `${whitespace}${attribute}=${quote}${url.toString()}${quote}`;
+      } catch {
+        return "";
+      }
+    },
+  );
 
 const identityKey = async (entry: ParsedEntry, feedUrl: string): Promise<string> => {
   const sourceId = entry.sourceId?.trim();
@@ -135,9 +150,11 @@ export const listSubscriptions = async (db: D1Database): Promise<SubscriptionVie
       `SELECT f.id AS feedId,
               f.canonical_feed_url AS feedUrl,
               f.site_url AS siteUrl,
-              COALESCE(s.custom_title, NULLIF(f.title, ''), f.canonical_feed_url) AS title
+              COALESCE(s.custom_title, NULLIF(f.title, ''), f.canonical_feed_url) AS title,
+              CASE WHEN fi.status = 'found' THEN fi.external_id ELSE NULL END AS iconExternalId
        FROM subscriptions s
        JOIN feeds f ON f.id = s.feed_id
+       LEFT JOIN feed_icons fi ON fi.feed_id = f.id
        WHERE s.active = 1
        ORDER BY title COLLATE NOCASE, f.id`,
     )
@@ -337,13 +354,34 @@ export const persistSuccessfulRefresh = async (
       contentHtml: string | null;
       contentHash: string | null;
       bytes: number;
+      enclosures: Array<{
+        url: string;
+        mimeType: string | null;
+        lengthBytes: number | null;
+        title: string | null;
+      }>;
     }
   >();
 
   for (const entry of parsed.entries) {
     const key = await identityKey(entry, fetchedFeed.canonicalFeedUrl);
     const url = canonicalizeEntryUrl(entry.url, fetchedFeed.canonicalFeedUrl);
-    const bytes = new TextEncoder().encode(entry.contentHtml).byteLength;
+    const enclosures = entry.enclosures.flatMap((enclosure) => {
+      const enclosureUrl = canonicalizeEntryUrl(enclosure.url, url ?? fetchedFeed.canonicalFeedUrl);
+      return enclosureUrl === null
+        ? []
+        : [
+            {
+              url: enclosureUrl,
+              mimeType: enclosure.mimeType,
+              lengthBytes: enclosure.lengthBytes,
+              title: enclosure.title,
+            },
+          ];
+    });
+    const contentBaseUrl = url ?? fetchedFeed.canonicalFeedUrl;
+    const normalizedContentHtml = normalizeContentUrls(entry.contentHtml, contentBaseUrl);
+    const bytes = new TextEncoder().encode(normalizedContentHtml).byteLength;
     const contentStatus =
       bytes === 0 ? "empty" : bytes > MAX_ENTRY_CONTENT_BYTES ? "oversized" : "stored";
     preparedByKey.set(key, {
@@ -355,9 +393,10 @@ export const persistSuccessfulRefresh = async (
       publishedAt: entry.publishedAt,
       sourceUpdatedAt: entry.sourceUpdatedAt,
       contentStatus,
-      contentHtml: contentStatus === "stored" ? entry.contentHtml : null,
-      contentHash: contentStatus === "stored" ? await sha256Hex(entry.contentHtml) : null,
+      contentHtml: contentStatus === "stored" ? normalizedContentHtml : null,
+      contentHash: contentStatus === "stored" ? await sha256Hex(normalizedContentHtml) : null,
       bytes,
+      enclosures,
     });
   }
 
@@ -386,8 +425,13 @@ export const persistSuccessfulRefresh = async (
   };
 
   const metadataRecords = prepared.map(
-    ({ contentHtml: _contentHtml, contentHash: _contentHash, bytes: _bytes, ...metadata }) =>
-      metadata,
+    ({
+      contentHtml: _contentHtml,
+      contentHash: _contentHash,
+      bytes: _bytes,
+      enclosures: _enclosures,
+      ...metadata
+    }) => metadata,
   );
   const entrySql = `INSERT INTO entries (
       feed_id, identity_key, source_id, title, url, author, published_at,
@@ -439,6 +483,49 @@ export const persistSuccessfulRefresh = async (
       .run();
   }
 
+  const observedIdentityRecords = prepared.map((record) => ({
+    identityKey: record.identityKey,
+  }));
+  for (const chunk of jsonChunks(observedIdentityRecords)) {
+    await db
+      .prepare(
+        `DELETE FROM entry_enclosures
+         WHERE entry_id IN (
+           SELECT e.id
+           FROM json_each(?) AS j
+           JOIN entries e
+             ON e.feed_id = ?
+            AND e.identity_key = json_extract(j.value, '$.identityKey')
+         )`,
+      )
+      .bind(chunk, feed.id)
+      .run();
+  }
+
+  const enclosureRecords = prepared.flatMap((record) =>
+    record.enclosures.map((enclosure, position) => ({
+      identityKey: record.identityKey,
+      position,
+      ...enclosure,
+    })),
+  );
+  const enclosureSql = `INSERT INTO entry_enclosures (
+      entry_id, position, url, mime_type, length_bytes, title
+    )
+    SELECT e.id,
+           json_extract(j.value, '$.position'),
+           json_extract(j.value, '$.url'),
+           json_extract(j.value, '$.mimeType'),
+           json_extract(j.value, '$.lengthBytes'),
+           json_extract(j.value, '$.title')
+    FROM json_each(?) AS j
+    JOIN entries e
+      ON e.feed_id = ?
+     AND e.identity_key = json_extract(j.value, '$.identityKey')`;
+  for (const chunk of jsonChunks(enclosureRecords)) {
+    await db.prepare(enclosureSql).bind(chunk, feed.id).run();
+  }
+
   const identityPayload = JSON.stringify(
     prepared.map((record) => ({ identityKey: record.identityKey })),
   );
@@ -486,7 +573,20 @@ export const persistSuccessfulRefresh = async (
       updated_at = excluded.updated_at
     WHERE entry_contents.content_hash IS NOT excluded.content_hash
        OR entry_contents.encoded_size_bytes IS NOT excluded.encoded_size_bytes`;
+  const touchContentChangesSql = `UPDATE entries
+    SET updated_at = ?
+    WHERE id IN (
+      SELECT e.id
+      FROM json_each(?) AS j
+      JOIN entries e
+        ON e.feed_id = ?
+       AND e.identity_key = json_extract(j.value, '$.identityKey')
+      JOIN entry_contents ec ON ec.entry_id = e.id
+      WHERE ec.content_hash IS NOT json_extract(j.value, '$.contentHash')
+         OR ec.encoded_size_bytes IS NOT json_extract(j.value, '$.bytes')
+    )`;
   for (const chunk of jsonChunks(storedRecords)) {
+    await db.prepare(touchContentChangesSql).bind(now, chunk, feed.id).run();
     await db.prepare(contentSql).bind(now, chunk, feed.id).run();
   }
 
