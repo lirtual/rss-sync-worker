@@ -83,7 +83,9 @@ describe("feed discovery", () => {
         },
       })) as typeof fetch;
 
-    await expect(discoverFeed("https://declared-large-html.example/", fetcher)).rejects.toMatchObject({
+    await expect(
+      discoverFeed("https://declared-large-html.example/", fetcher),
+    ).rejects.toMatchObject({
       code: "response_too_large",
     });
   });
@@ -98,7 +100,9 @@ describe("feed discovery", () => {
         },
       })) as typeof fetch;
 
-    await expect(discoverFeed("https://mislabeled-large-html.example/", fetcher)).rejects.toMatchObject({
+    await expect(
+      discoverFeed("https://mislabeled-large-html.example/", fetcher),
+    ).rejects.toMatchObject({
       code: "response_too_large",
     });
   });
