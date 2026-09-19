@@ -78,9 +78,10 @@ export const recordQueueOutcome = async (
       .prepare(
         `UPDATE service_state
          SET last_queue_success_at = ?, updated_at = ?
-         WHERE id = 1`,
+         WHERE id = 1
+           AND (last_queue_success_at IS NULL OR last_queue_success_at <= ?)`,
       )
-      .bind(now, now)
+      .bind(now, now, now - 60_000)
       .run();
     return;
   }

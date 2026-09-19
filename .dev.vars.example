@@ -1,3 +1,2 @@
-READER_USERNAME=test-reader
-READER_TOKEN=replace-with-a-long-random-reader-token
-ADMIN_TOKEN=replace-with-a-different-long-random-admin-token
+USERNAME=test-reader
+PASSWORD=replace-with-a-long-random-password

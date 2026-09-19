@@ -37,7 +37,12 @@ const requireAdmin: MiddlewareHandler<AdminBindings> = async (context, next) => 
   if (authorization === undefined || !authorization.startsWith(prefix)) {
     return context.json({ error: "unauthorized" }, 401, noStoreHeaders);
   }
-  if (!(await safeEqual(authorization.slice(prefix.length), context.env.ADMIN_TOKEN))) {
+  // Reader and Admin share the existing PASSWORD; blank values never authenticate.
+  if (
+    !context.env.PASSWORD ||
+    !authorization.slice(prefix.length) ||
+    !(await safeEqual(authorization.slice(prefix.length), context.env.PASSWORD))
+  ) {
     return context.json({ error: "unauthorized" }, 401, noStoreHeaders);
   }
   await next();
@@ -91,6 +96,9 @@ adminApp.post("/admin/feeds/:id/refresh", async (context) => {
   const outcome = await enqueueFeedRefresh(context.env, feedId);
   if (outcome === "budget-exhausted") {
     return context.json({ status: outcome }, 429, noStoreHeaders);
+  }
+  if (outcome === "delivery-uncertain") {
+    return context.json({ status: outcome }, 503, noStoreHeaders);
   }
   return context.json({ status: outcome }, 202, noStoreHeaders);
 });

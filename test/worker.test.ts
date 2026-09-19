@@ -81,7 +81,7 @@ describe("worker foundation", () => {
     });
   });
 
-  it("protects admin routes with a separate bearer token", async () => {
+  it("protects admin routes with the shared Reader password", async () => {
     const missing = await fetchWorker("/admin/status");
     expect(missing.status).toBe(401);
 
@@ -91,7 +91,7 @@ describe("worker foundation", () => {
     expect(invalid.status).toBe(401);
 
     const valid = await fetchWorker("/admin/status", {
-      headers: { Authorization: "Bearer test-admin-token" },
+      headers: { Authorization: "Bearer test-reader-token" },
     });
     expect(valid.status).toBe(200);
     expect(await valid.json()).toMatchObject({

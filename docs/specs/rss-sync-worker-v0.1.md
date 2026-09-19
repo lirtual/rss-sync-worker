@@ -41,9 +41,8 @@ When the dispatch budget is exhausted, the service delays additional due Feeds a
 
 Required Worker secrets:
 
-- `READER_USERNAME`
-- `READER_TOKEN`
-- `ADMIN_TOKEN`
+- `USERNAME`
+- `PASSWORD`
 
 There is one logical user. Do not create users, sessions, passkeys, OAuth, registration, or token-management tables.
 
@@ -51,19 +50,17 @@ There is one logical user. Do not create users, sessions, passkeys, OAuth, regis
 
 Google Reader compatibility is mounted under `/api/reader`.
 
-`POST /api/reader/accounts/ClientLogin` validates `Email` against `READER_USERNAME` and `Passwd` against `READER_TOKEN`, and returns a Google Reader-compatible credential response.
+`POST /api/reader/accounts/ClientLogin` validates `Email` against `USERNAME` and `Passwd` against `PASSWORD`, and returns a Google Reader-compatible credential response.
 
 Authenticated API reads accept `Authorization: GoogleLogin auth=<token>`.
 
-Authenticated API writes must support the edit token style Reeder uses; the service may use `READER_TOKEN` as both auth and edit token as long as protocol contract tests prove the exact wire behavior required by Reeder.
+Authenticated API writes must support the edit token style Reeder uses; the service may use `PASSWORD` as both auth and edit token as long as protocol contract tests prove the exact wire behavior required by Reeder.
 
 Credentials must never be logged.
 
 ### Admin authentication
 
-`/admin/*` requires `Authorization: Bearer <ADMIN_TOKEN>`.
-
-Reader credentials must not authorize admin endpoints, and the admin token must not authorize Reader protocol endpoints.
+`/admin/*` requires `Authorization: Bearer <PASSWORD>`. Admin and Reader share the same single-user `PASSWORD`; missing or blank values never authenticate.
 
 `GET /health` is public and contains no sensitive data.
 

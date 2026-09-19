@@ -45,7 +45,7 @@ Configure Reeder's Google Reader-compatible account with a service URL ending in
 https://<your-host>/api/reader
 ```
 
-Use the configured `READER_USERNAME` and `READER_TOKEN` as the account credentials.
+Use the configured `USERNAME` and `PASSWORD` as the account credentials.
 
 The exact protocol endpoints, supported streams, limits, and unsupported behavior are documented in [`docs/reeder-compatibility.md`](docs/reeder-compatibility.md).
 
@@ -55,7 +55,7 @@ Public:
 
 - `GET /health`
 
-Admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`:
+Admin endpoints require `Authorization: Bearer <PASSWORD>`:
 
 - `GET /admin/status`
 - `GET /admin/feeds?after=<feed-id>&limit=<1-100>`
@@ -63,15 +63,14 @@ Admin endpoints require `Authorization: Bearer <ADMIN_TOKEN>`:
 - `POST /admin/opml/import`
 - `GET /admin/opml/export`
 
-Admin and Reader credentials are intentionally separate.
+Admin and Reader use the same single-user `PASSWORD`. There is no separate Admin secret.
 
 ## Configuration
 
 Secrets that must not be committed:
 
-- `READER_USERNAME`
-- `READER_TOKEN`
-- `ADMIN_TOKEN`
+- `USERNAME`
+- `PASSWORD`
 
 Non-secret Worker variables in `wrangler.jsonc`:
 

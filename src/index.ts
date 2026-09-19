@@ -44,9 +44,10 @@ const textHeaders = {
 };
 const jsonHeaders = { "cache-control": "no-store" };
 
-const readerUsername = (env: Env): string => env.READER_USERNAME ?? env.USERNAME ?? "";
-const readerToken = (env: Env): string => env.READER_TOKEN ?? env.PASSWORD ?? "";
-const adminToken = (env: Env): string => env.ADMIN_TOKEN ?? env.PASSWORD ?? "";
+// The deployed single-user contract uses only USERNAME and PASSWORD.
+const readerUsername = (env: Env): string => env.USERNAME ?? "";
+const readerToken = (env: Env): string => env.PASSWORD ?? "";
+const adminToken = readerToken;
 
 const textResponse = (body: string, status = 200): Response =>
   new Response(body, { status, headers: textHeaders });
@@ -75,7 +76,7 @@ const requireReader: MiddlewareHandler<AppBindings> = async (context, next) => {
     context.req.method === "POST"
       ? params.get("T")
       : readerCredential(context.req.header("Authorization"));
-  if (credential === null || !(await safeEqual(credential, expected))) {
+  if (!expected || !credential || !(await safeEqual(credential, expected))) {
     return new Response("Unauthorized", {
       status: 401,
       headers: { ...textHeaders, "X-Reader-Google-Bad-Token": "true" },
@@ -91,7 +92,11 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   if (authorization === undefined || !authorization.startsWith(prefix)) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
-  if (!(await safeEqual(authorization.slice(prefix.length), adminToken(context.env)))) {
+  if (
+    !adminToken(context.env) ||
+    !authorization.slice(prefix.length) ||
+    !(await safeEqual(authorization.slice(prefix.length), adminToken(context.env)))
+  ) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
   await next();
@@ -246,7 +251,12 @@ app.post("/api/reader/accounts/ClientLogin", async (context) => {
     safeEqual(password, readerToken(context.env)),
   ]);
 
-  if (!usernameMatches || !passwordMatches) {
+  if (
+    !readerUsername(context.env) ||
+    !readerToken(context.env) ||
+    !usernameMatches ||
+    !passwordMatches
+  ) {
     return context.json({ error_message: "access unauthorized" }, 401, jsonHeaders);
   }
 

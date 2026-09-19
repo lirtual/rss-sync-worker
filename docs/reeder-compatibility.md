@@ -6,10 +6,10 @@
 
 Use the service base URL ending in `/api/reader` and the configured single-user credentials:
 
-- username: `READER_USERNAME`
-- password/app token: `READER_TOKEN`
+- username: `USERNAME`
+- password/app token: `PASSWORD`
 
-Admin APIs use a separate Bearer `ADMIN_TOKEN` and are not part of the Reeder protocol surface.
+Admin APIs use the shared `PASSWORD` in their Bearer Authorization header and are not part of the Reeder protocol surface.
 
 ## Supported Reader endpoints
 

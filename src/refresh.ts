@@ -18,7 +18,11 @@ import {
 
 const DEFAULT_CRON_BATCH = 20;
 type Fetcher = typeof fetch;
-export type EnqueueOutcome = "enqueued" | "already-dispatched" | "budget-exhausted";
+export type EnqueueOutcome =
+  | "enqueued"
+  | "already-dispatched"
+  | "budget-exhausted"
+  | "delivery-uncertain";
 
 export const enqueueFeedRefresh = async (
   env: Env,
@@ -37,11 +41,14 @@ export const enqueueFeedRefresh = async (
   try {
     await env.REFRESH_QUEUE.send(message);
   } catch (error) {
-    console.error("queue_send_failed", {
+    // A rejected send may already have been accepted by Queues. Do not refund the
+    // budget or release the dispatch token: the original message may still arrive.
+    console.error("queue_send_uncertain", {
       feedId,
+      correlation: message.dispatchToken.slice(0, 8),
       errorClass: error instanceof Error ? error.name : "unknown",
     });
-    throw error;
+    return "delivery-uncertain";
   }
   return "enqueued";
 };
