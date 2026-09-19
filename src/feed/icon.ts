@@ -19,7 +19,7 @@ interface IconCacheRow {
 export interface StoredFeedIcon {
   externalId: string;
   mediaType: string;
-  body: ArrayBuffer;
+  body: Uint8Array;
   etag: string;
 }
 
@@ -238,14 +238,26 @@ export const readFeedIcon = async (
     .first<{
       externalId: string;
       mediaType: string | null;
-      body: ArrayBuffer | null;
+      body: unknown;
       etag: string | null;
     }>();
   if (row === null || row.mediaType === null || row.body === null || row.etag === null) return null;
+
+  let body: Uint8Array;
+  if (row.body instanceof ArrayBuffer) {
+    body = new Uint8Array(row.body);
+  } else if (ArrayBuffer.isView(row.body)) {
+    body = new Uint8Array(row.body.buffer, row.body.byteOffset, row.body.byteLength);
+  } else if (Array.isArray(row.body) && row.body.every((value) => typeof value === "number")) {
+    body = Uint8Array.from(row.body);
+  } else {
+    return null;
+  }
+
   return {
     externalId: row.externalId,
     mediaType: row.mediaType,
-    body: row.body,
+    body,
     etag: row.etag,
   };
 };
