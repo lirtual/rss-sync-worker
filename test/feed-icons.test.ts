@@ -142,7 +142,11 @@ describe("feed icon delivery", () => {
     );
     expect((await subscription(fallbackId))?.iconUrl).not.toBe("");
 
-    const missingId = await ensureSubscription(env.DB, "https://missing-icon.example/feed.xml", now);
+    const missingId = await ensureSubscription(
+      env.DB,
+      "https://missing-icon.example/feed.xml",
+      now,
+    );
     let calls = 0;
     const missingFetcher = (async () => {
       calls += 1;
@@ -154,7 +158,14 @@ describe("feed icon delivery", () => {
       iconUrls: [],
       entries: [],
     };
-    await refreshFeedIcon(env.DB, missingId, parsed, "https://missing-icon.example/feed.xml", now, missingFetcher);
+    await refreshFeedIcon(
+      env.DB,
+      missingId,
+      parsed,
+      "https://missing-icon.example/feed.xml",
+      now,
+      missingFetcher,
+    );
     const firstCalls = calls;
     expect(firstCalls).toBeGreaterThan(0);
     await refreshFeedIcon(
@@ -186,10 +197,10 @@ describe("feed icon delivery", () => {
         );
       }
       if (url === "https://unsafe-icon.example/") {
-        return new Response(
-          '<html><head><link rel="icon" href="/huge.png"></head></html>',
-          { status: 200, headers: { "content-type": "text/html" } },
-        );
+        return new Response('<html><head><link rel="icon" href="/huge.png"></head></html>', {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
       }
       if (url === "https://unsafe-icon.example/huge.png") {
         return new Response(new Uint8Array([1]), {
