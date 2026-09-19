@@ -2,7 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
 const adminHeaders = {
-  Authorization: "Bearer test-admin-token",
+  Authorization: "Bearer test-reader-token",
   "content-type": "text/xml; charset=UTF-8",
 };
 
