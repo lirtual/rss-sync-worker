@@ -83,18 +83,12 @@ export const decodeFeedDocument = (
   try {
     decoder = new TextDecoder(requested, { fatal: true });
   } catch {
-    throw new FeedDecodeError(
-      "unsupported_charset",
-      `unsupported feed charset: ${requested}`,
-    );
+    throw new FeedDecodeError("unsupported_charset", `unsupported feed charset: ${requested}`);
   }
 
   try {
     return { text: decoder.decode(bytes), encoding: decoder.encoding };
   } catch {
-    throw new FeedDecodeError(
-      "decode_error",
-      `feed body is not valid ${decoder.encoding} data`,
-    );
+    throw new FeedDecodeError("decode_error", `feed body is not valid ${decoder.encoding} data`);
   }
 };
