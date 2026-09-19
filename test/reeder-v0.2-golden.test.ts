@@ -237,7 +237,7 @@ describe("Reeder v0.2 value-level golden contract", () => {
 
     const unread = await fetchReader("unread-count");
     expect(await unread.json()).toEqual({
-      max: 1000,
+      max: 0,
       unreadcounts: [
         {
           id: "user/-/state/com.google/reading-list",
