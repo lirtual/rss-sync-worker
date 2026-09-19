@@ -112,7 +112,7 @@ export const processRefreshMessage = async (
       return "not-modified";
     }
 
-    const parsed = parseFeed(fetched.body ?? "");
+    const parsed = parseFeed(new TextDecoder().decode(fetched.body ?? new Uint8Array()));
     await persistSuccessfulRefresh(env.DB, feed, message, parsed, responseMeta, now);
     return "processed";
   } catch (error) {
