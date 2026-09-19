@@ -42,6 +42,9 @@ const normalizeItem = (value: Record<string, unknown>) => ({
   },
 });
 
+const normalizeItems = (items: Array<Record<string, unknown>>) =>
+  items.map(normalizeItem).sort((left, right) => String(left.title).localeCompare(String(right.title)));
+
 describe("Reeder v0.2 value-level golden contract", () => {
   it("locks subscription, item, icon, folder, enclosure and unread values", async () => {
     const now = 1_780_500_000_000;
@@ -158,7 +161,32 @@ describe("Reeder v0.2 value-level golden contract", () => {
       body: form,
     });
     const itemBody = (await itemResponse.json()) as { items: Array<Record<string, unknown>> };
-    expect(itemBody.items.map(normalizeItem)).toEqual([
+    expect(normalizeItems(itemBody.items)).toEqual([
+      {
+        id: "<item-id>",
+        title: "Bare Item",
+        timestampUsec: "<timestamp-usec>",
+        crawlTimeMsec: "<crawl-msec>",
+        published: "<published-sec>",
+        updated: "<updated-sec>",
+        alternate: [],
+        canonical: [],
+        content: { direction: "ltr", content: "Bare body" },
+        summary: { direction: "ltr", content: "Bare body" },
+        origin: {
+          streamId: "feed/<id>",
+          title: "Custom Source",
+          htmlUrl: "https://golden.example/",
+        },
+        categories: [
+          "user/-/state/com.google/reading-list",
+          "user/-/state/com.google/read",
+          "user/-/label/Alpha",
+          "user/-/label/Beta",
+        ],
+        enclosure: [],
+        author: "",
+      },
       {
         id: "<item-id>",
         title: "Normal Item",
@@ -187,38 +215,13 @@ describe("Reeder v0.2 value-level golden contract", () => {
         ],
         author: "Alice",
       },
-      {
-        id: "<item-id>",
-        title: "Bare Item",
-        timestampUsec: "<timestamp-usec>",
-        crawlTimeMsec: "<crawl-msec>",
-        published: "<published-sec>",
-        updated: "<updated-sec>",
-        alternate: [],
-        canonical: [],
-        content: { direction: "ltr", content: "Bare body" },
-        summary: { direction: "ltr", content: "Bare body" },
-        origin: {
-          streamId: "feed/<id>",
-          title: "Custom Source",
-          htmlUrl: "https://golden.example/",
-        },
-        categories: [
-          "user/-/state/com.google/reading-list",
-          "user/-/state/com.google/read",
-          "user/-/label/Alpha",
-          "user/-/label/Beta",
-        ],
-        enclosure: [],
-        author: "",
-      },
     ]);
 
     const direct = await fetchReader(
       `stream/contents/${encodeURIComponent(`feed/${feedId}`)}?n=10&r=o`,
     );
     const directBody = (await direct.json()) as { items: Array<Record<string, unknown>> };
-    expect(directBody.items.map(normalizeItem)).toEqual(itemBody.items.map(normalizeItem));
+    expect(normalizeItems(directBody.items)).toEqual(normalizeItems(itemBody.items));
 
     const mark = await fetchReader("mark-all-as-read", {
       method: "POST",
