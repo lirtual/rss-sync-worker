@@ -115,7 +115,10 @@ const readBodyLimited = async (response: Response, maxBodyBytes: number): Promis
       total += value.byteLength;
       if (total > maxBodyBytes) {
         await reader.cancel();
-        throw new FeedFetchError("response_too_large", "feed response exceeds configured size limit");
+        throw new FeedFetchError(
+          "response_too_large",
+          "feed response exceeds configured size limit",
+        );
       }
       chunks.push(value);
     }
