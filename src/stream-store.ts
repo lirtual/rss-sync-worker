@@ -112,7 +112,7 @@ export const findReaderEntries = async (db: D1Database, ids: number[]): Promise<
     .prepare(
       `SELECT e.id,
               e.feed_id AS feedId,
-              COALESCE(NULLIF(f.title, ''), f.canonical_feed_url) AS feedTitle,
+              COALESCE(NULLIF(s.custom_title, ''), NULLIF(f.title, ''), f.canonical_feed_url) AS feedTitle,
               f.site_url AS feedSiteUrl,
               e.title,
               e.url,
@@ -121,6 +121,7 @@ export const findReaderEntries = async (db: D1Database, ids: number[]): Promise<
               e.source_updated_at AS sourceUpdatedAt,
               e.ingested_at AS ingestedAt,
               e.updated_at AS updatedAt,
+              ec.updated_at AS contentUpdatedAt,
               COALESCE(ec.content_html, '') AS contentHtml,
               es.is_read AS isRead,
               es.is_starred AS isStarred
