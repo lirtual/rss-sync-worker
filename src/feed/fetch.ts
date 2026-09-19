@@ -97,9 +97,32 @@ export const assertSafeFeedUrl = (input: string | URL): URL => {
   return url;
 };
 
-const readBodyLimited = async (response: Response, maxBodyBytes: number): Promise<Uint8Array> => {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && Number(contentLength) > maxBodyBytes) {
+const isHtmlContentType = (contentType: string | null): boolean => {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return mediaType === "text/html" || mediaType === "application/xhtml+xml";
+};
+
+const looksLikeHtml = (bytes: Uint8Array): boolean => {
+  const sample = new TextDecoder("utf-8", { fatal: false, ignoreBOM: false })
+    .decode(bytes.subarray(0, Math.min(bytes.byteLength, 512)))
+    .trimStart()
+    .toLowerCase();
+  return sample.startsWith("<!doctype html") || sample.startsWith("<html");
+};
+
+const readBodyLimited = async (
+  response: Response,
+  maxBodyBytes: number,
+  maxHtmlBodyBytes: number | null,
+): Promise<Uint8Array> => {
+  const contentLengthHeader = response.headers.get("content-length");
+  const contentLength = contentLengthHeader === null ? null : Number(contentLengthHeader);
+  let effectiveLimit =
+    maxHtmlBodyBytes !== null && isHtmlContentType(response.headers.get("content-type"))
+      ? Math.min(maxBodyBytes, maxHtmlBodyBytes)
+      : maxBodyBytes;
+
+  if (contentLength !== null && Number.isFinite(contentLength) && contentLength > effectiveLimit) {
     await response.body?.cancel();
     throw new FeedFetchError("response_too_large", "feed response exceeds configured size limit");
   }
@@ -107,13 +130,44 @@ const readBodyLimited = async (response: Response, maxBodyBytes: number): Promis
 
   const reader = response.body.getReader();
   let total = 0;
+  let sniff = new Uint8Array();
+  let sniffComplete = maxHtmlBodyBytes === null || isHtmlContentType(response.headers.get("content-type"));
   const chunks: Uint8Array[] = [];
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+
+      if (!sniffComplete) {
+        const remaining = 512 - sniff.byteLength;
+        if (remaining > 0) {
+          const portion = value.subarray(0, Math.min(value.byteLength, remaining));
+          const next = new Uint8Array(sniff.byteLength + portion.byteLength);
+          next.set(sniff);
+          next.set(portion, sniff.byteLength);
+          sniff = next;
+        }
+        if (looksLikeHtml(sniff)) {
+          effectiveLimit = Math.min(maxBodyBytes, maxHtmlBodyBytes ?? maxBodyBytes);
+          sniffComplete = true;
+          if (
+            contentLength !== null &&
+            Number.isFinite(contentLength) &&
+            contentLength > effectiveLimit
+          ) {
+            await reader.cancel();
+            throw new FeedFetchError(
+              "response_too_large",
+              "feed response exceeds configured size limit",
+            );
+          }
+        } else if (sniff.byteLength >= 512) {
+          sniffComplete = true;
+        }
+      }
+
       total += value.byteLength;
-      if (total > maxBodyBytes) {
+      if (total > effectiveLimit) {
         await reader.cancel();
         throw new FeedFetchError(
           "response_too_large",
@@ -155,6 +209,7 @@ const fetchWithTimeout = async (
 
 export interface FeedFetchOptions {
   maxBodyBytes?: number;
+  maxHtmlBodyBytes?: number;
   accept?: string;
 }
 
@@ -219,7 +274,7 @@ export const fetchFeedDocument = async (
 
     return {
       status: "fetched",
-      body: await readBodyLimited(response, maxBodyBytes),
+      body: await readBodyLimited(response, maxBodyBytes, options.maxHtmlBodyBytes ?? null),
       finalUrl: current.toString(),
       permanentRedirectTarget:
         followedPermanentRedirect && permanentOnly && current.toString() !== input
