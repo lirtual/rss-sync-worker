@@ -64,6 +64,20 @@ const canonicalizeEntryUrl = (raw: string | null, feedUrl: string): string | nul
   }
 };
 
+const normalizeContentUrls = (html: string, baseUrl: string): string =>
+  html.replace(
+    /(\s)(href|src|poster)\s*=\s*(["'])(.*?)\3/giu,
+    (_match, whitespace: string, attribute: string, quote: string, rawValue: string) => {
+      try {
+        const url = new URL(rawValue.trim(), baseUrl);
+        if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+        return `${whitespace}${attribute}=${quote}${url.toString()}${quote}`;
+      } catch {
+        return "";
+      }
+    },
+  );
+
 const identityKey = async (entry: ParsedEntry, feedUrl: string): Promise<string> => {
   const sourceId = entry.sourceId?.trim();
   if (sourceId) return sha256Hex(`guid:${sourceId}`);
@@ -362,7 +376,9 @@ export const persistSuccessfulRefresh = async (
             },
           ];
     });
-    const bytes = new TextEncoder().encode(entry.contentHtml).byteLength;
+    const contentBaseUrl = url ?? fetchedFeed.canonicalFeedUrl;
+    const normalizedContentHtml = normalizeContentUrls(entry.contentHtml, contentBaseUrl);
+    const bytes = new TextEncoder().encode(normalizedContentHtml).byteLength;
     const contentStatus =
       bytes === 0 ? "empty" : bytes > MAX_ENTRY_CONTENT_BYTES ? "oversized" : "stored";
     preparedByKey.set(key, {
@@ -374,8 +390,8 @@ export const persistSuccessfulRefresh = async (
       publishedAt: entry.publishedAt,
       sourceUpdatedAt: entry.sourceUpdatedAt,
       contentStatus,
-      contentHtml: contentStatus === "stored" ? entry.contentHtml : null,
-      contentHash: contentStatus === "stored" ? await sha256Hex(entry.contentHtml) : null,
+      contentHtml: contentStatus === "stored" ? normalizedContentHtml : null,
+      contentHash: contentStatus === "stored" ? await sha256Hex(normalizedContentHtml) : null,
       bytes,
       enclosures,
     });
