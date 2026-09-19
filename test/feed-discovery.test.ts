@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { discoverFeed } from "../src/feed/discovery";
-import type { FeedFetchError } from "../src/feed/fetch";
 
 const response = (body: string, contentType: string): Response =>
   new Response(body, { status: 200, headers: { "content-type": contentType } });
@@ -69,9 +68,7 @@ describe("feed discovery", () => {
         "text/html",
       )) as typeof fetch;
 
-    await expect(discoverFeed("https://unsafe.example/", fetcher)).rejects.toMatchObject<
-      Partial<FeedFetchError>
-    >({
+    await expect(discoverFeed("https://unsafe.example/", fetcher)).rejects.toMatchObject({
       code: "unsafe_target",
     });
   });
@@ -80,9 +77,7 @@ describe("feed discovery", () => {
     const html = `<html><head></head><body>${"x".repeat(1024 * 1024)}</body></html>`;
     const fetcher = (async () => response(html, "text/html")) as typeof fetch;
 
-    await expect(discoverFeed("https://large-html.example/", fetcher)).rejects.toMatchObject<
-      Partial<FeedFetchError>
-    >({
+    await expect(discoverFeed("https://large-html.example/", fetcher)).rejects.toMatchObject({
       code: "response_too_large",
     });
   });
