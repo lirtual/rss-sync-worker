@@ -46,7 +46,7 @@ const jsonHeaders = { "cache-control": "no-store" };
 
 const readerUsername = (env: Env): string => env.READER_USERNAME ?? env.USERNAME ?? "";
 const readerToken = (env: Env): string => env.READER_TOKEN ?? env.PASSWORD ?? "";
-const adminToken = (env: Env): string => env.ADMIN_TOKEN ?? env.PASSWORD ?? "";
+const adminToken = (env: Env): string => env.ADMIN_TOKEN ?? "";
 
 const textResponse = (body: string, status = 200): Response =>
   new Response(body, { status, headers: textHeaders });
@@ -91,7 +91,11 @@ const requireAdmin: MiddlewareHandler<AppBindings> = async (context, next) => {
   if (authorization === undefined || !authorization.startsWith(prefix)) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
-  if (!(await safeEqual(authorization.slice(prefix.length), adminToken(context.env)))) {
+  if (
+    !adminToken(context.env) ||
+    !authorization.slice(prefix.length) ||
+    !(await safeEqual(authorization.slice(prefix.length), adminToken(context.env)))
+  ) {
     return context.json({ error: "unauthorized" }, 401, jsonHeaders);
   }
   await next();

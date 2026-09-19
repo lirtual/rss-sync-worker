@@ -4,6 +4,22 @@ const MAX_ENTRY_CONTENT_BYTES = 512 * 1024;
 const DISPATCH_DEADLINE_MS = 15 * 60 * 1000;
 const CHANGED_REFRESH_MS = 30 * 60 * 1000;
 const QUIET_REFRESH_MS = 60 * 60 * 1000;
+const QUIET_DAY_MS = 24 * QUIET_REFRESH_MS;
+const QUIET_WEEK_MS = 7 * QUIET_DAY_MS;
+
+// Keep an empty Feed from resetting its quiet age after every successful poll.
+export const quietRefreshDelayMs = (
+  now: number,
+  lastChangeAt: number | null,
+  bootstrappedAt: number | null,
+  firstOrPreviousSuccessAt: number | null,
+): number => {
+  const quietSince = lastChangeAt ?? bootstrappedAt ?? firstOrPreviousSuccessAt ?? now;
+  const quietAge = Math.max(0, now - quietSince);
+  if (quietAge >= QUIET_WEEK_MS) return 4 * QUIET_REFRESH_MS;
+  if (quietAge >= QUIET_DAY_MS) return 2 * QUIET_REFRESH_MS;
+  return QUIET_REFRESH_MS;
+};
 const FAILURE_BASE_MS = 15 * 60 * 1000;
 const FAILURE_MAX_MS = 24 * 60 * 60 * 1000;
 const REDIRECT_CONFIRMATIONS = 3;
@@ -21,6 +37,8 @@ export interface DispatchedFeed {
   etag: string | null;
   lastModified: string | null;
   bootstrappedAt: number | null;
+  lastChangeAt: number | null;
+  lastSuccessAt: number | null;
   consecutiveFailures: number;
 }
 
@@ -196,6 +214,8 @@ export const loadDispatchedFeed = async (
               f.etag,
               f.last_modified AS lastModified,
               f.consecutive_failures AS consecutiveFailures,
+              f.last_change_at AS lastChangeAt,
+              f.last_success_at AS lastSuccessAt,
               s.bootstrapped_at AS bootstrappedAt
        FROM feeds f
        JOIN subscriptions s ON s.feed_id = f.id AND s.active = 1
@@ -216,7 +236,8 @@ const recordRedirectEvidence = async (
       .prepare(
         `UPDATE feeds
          SET redirect_candidate_url = NULL, redirect_candidate_successes = 0
-         WHERE id = ? AND dispatch_token = ?`,
+         WHERE id = ? AND dispatch_token = ?
+           AND (redirect_candidate_url IS NOT NULL OR redirect_candidate_successes <> 0)`,
       )
       .bind(feed.id, message.dispatchToken)
       .run();
@@ -303,7 +324,7 @@ export const persistNotModifiedRefresh = async (
       responseMeta.lastModified,
       now,
       now,
-      now + QUIET_REFRESH_MS,
+      now + quietRefreshDelayMs(now, feed.lastChangeAt, feed.bootstrappedAt, feed.lastSuccessAt),
       now,
       feed.id,
       message.dispatchToken,
@@ -539,7 +560,10 @@ export const persistSuccessfulRefresh = async (
       responseMeta.lastModified,
       now,
       now,
-      now + (insertedEntries > 0 ? CHANGED_REFRESH_MS : QUIET_REFRESH_MS),
+      now +
+        (insertedEntries > 0
+          ? CHANGED_REFRESH_MS
+          : quietRefreshDelayMs(now, feed.lastChangeAt, feed.bootstrappedAt, feed.lastSuccessAt)),
       insertedEntries,
       now,
       now,
