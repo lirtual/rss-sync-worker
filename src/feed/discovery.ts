@@ -79,6 +79,7 @@ export const discoverFeed = async (
 ): Promise<DiscoveredFeed | null> => {
   const initial = await fetchFeedDocument(input, { etag: null, lastModified: null }, fetcher, {
     accept: DISCOVERY_ACCEPT,
+    maxHtmlBodyBytes: HTML_DISCOVERY_MAX_BYTES,
   });
   if (initial.status !== "fetched" || initial.body === null) return null;
 
