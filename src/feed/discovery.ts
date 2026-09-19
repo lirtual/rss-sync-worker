@@ -55,10 +55,7 @@ const discoveryCandidates = (html: string, baseUrl: string): string[] => {
   const seen = new Set<string>();
   for (const match of html.matchAll(/<link\b[^>]*>/giu)) {
     const attrs = attributes(match[0]);
-    const rel = (attrs.get("rel") ?? "")
-      .toLowerCase()
-      .split(/\s+/u)
-      .filter(Boolean);
+    const rel = (attrs.get("rel") ?? "").toLowerCase().split(/\s+/u).filter(Boolean);
     const type = (attrs.get("type") ?? "").toLowerCase().split(";", 1)[0]?.trim() ?? "";
     const href = attrs.get("href")?.trim() ?? "";
     if (!rel.includes("alternate") || !FEED_TYPES.has(type) || href === "") continue;
@@ -80,12 +77,9 @@ export const discoverFeed = async (
   input: string,
   fetcher: typeof fetch = fetch,
 ): Promise<DiscoveredFeed | null> => {
-  const initial = await fetchFeedDocument(
-    input,
-    { etag: null, lastModified: null },
-    fetcher,
-    { accept: DISCOVERY_ACCEPT },
-  );
+  const initial = await fetchFeedDocument(input, { etag: null, lastModified: null }, fetcher, {
+    accept: DISCOVERY_ACCEPT,
+  });
   if (initial.status !== "fetched" || initial.body === null) return null;
 
   const direct = parseFetchedFeed(initial.body, initial.contentType);
