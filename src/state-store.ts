@@ -20,7 +20,10 @@ export const mutateEntryStates = async (
 
   if (mutation.isRead !== undefined) {
     const value = mutation.isRead ? 1 : 0;
-    setClauses.push("is_read = ?", "read_changed_at = CASE WHEN is_read <> ? THEN ? ELSE read_changed_at END");
+    setClauses.push(
+      "is_read = ?",
+      "read_changed_at = CASE WHEN is_read <> ? THEN ? ELSE read_changed_at END",
+    );
     bindings.push(value, value, now);
     changedClauses.push("is_read <> ?");
     changedBindings.push(value);
