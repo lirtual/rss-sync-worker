@@ -13,7 +13,7 @@ Admin APIs use a separate Bearer `ADMIN_TOKEN` and are not part of the Reeder pr
 
 ## Supported Reader endpoints
 
-| Method | Path | v0.1 behavior |
+| Method | Path | v0.2 behavior |
 | --- | --- | --- |
 | POST | `/accounts/ClientLogin` | Single-user login; returns SID/LSID/Auth credential lines. |
 | GET | `/reader/api/0/token` | Returns the configured Reader token after Reader authentication. |
@@ -21,19 +21,19 @@ Admin APIs use a separate Bearer `ADMIN_TOKEN` and are not part of the Reeder pr
 | GET | `/reader/api/0/tag/list` | Lists persisted folders/labels. |
 | POST | `/reader/api/0/rename-tag` | Renames a folder; merge-on-name-conflict preserves memberships. |
 | POST | `/reader/api/0/disable-tag` | Deletes a folder and its memberships without deleting feeds or entries. |
-| GET | `/reader/api/0/subscription/list` | Lists active subscriptions and many-to-many folder memberships. |
-| POST | `/reader/api/0/subscription/edit` | Subscribe, unsubscribe, custom title, add/remove folder membership. |
-| POST | `/reader/api/0/subscription/quickadd` | Adds/reactivates a direct absolute RSS/Atom URL and queues refresh work. |
+| GET | `/reader/api/0/subscription/list` | Lists active subscriptions, effective titles, many-to-many folders, site URL, and Worker-hosted icon URL when available. |
+| POST | `/reader/api/0/subscription/edit` | Subscribe, unsubscribe, custom title, and add/move folder membership. Removing a subscription label through `r` is explicitly unsupported. |
+| POST | `/reader/api/0/subscription/quickadd` | Validates a direct Feed or performs bounded webpage discovery, then adds/reactivates the discovered Feed and queues refresh work. |
 | GET | `/reader/api/0/stream/items/ids` | Stable keyset item-ID pagination with opaque continuation. |
-| POST | `/reader/api/0/stream/items/contents` | Returns up to 100 requested item bodies. |
+| POST | `/reader/api/0/stream/items/contents` | Returns up to 100 requested item bodies with stable source metadata and enclosure arrays. |
 | POST | `/reader/api/0/edit-tag` | Idempotent read/unread/kept-unread and star/unstar mutations. |
 | POST | `/reader/api/0/mark-all-as-read` | Server-side bulk read over reading-list, feed, or folder scope. |
 
-Unknown Reader endpoints return an explicit non-success response; unsupported state-changing operations are never silently accepted.
+Authenticated unknown Reader endpoints return `[]` with HTTP 200, matching the pinned Miniflux baseline. Unsupported state-changing operations are explicitly rejected.
 
 ## Supported streams
 
-`stream/items/ids` and bulk-read behavior support the combinations required by the v0.1 contract:
+`stream/items/ids` and bulk-read behavior support the combinations required by the v0.2 contract:
 
 - `user/-/state/com.google/reading-list`
 - `user/-/state/com.google/starred`
@@ -79,9 +79,25 @@ The CI release regression seeds 500 unread items and proves page size does not l
 
 ## Feed fetching behavior visible to Reeder
 
-Subscriptions refresh asynchronously through the Queue path. The service supports RSS 2.0 and Atom in v0.1, conditional HTTP (`ETag` and `Last-Modified`), bounded redirects, permanent-redirect identity migration after repeated evidence, retry backoff, duplicate Queue delivery, and non-destructive source-window shrinkage.
+Subscriptions refresh asynchronously through the Queue path. v0.2 supports RSS 2.0, RSS 1.0/RDF, Atom 1.0, Atom 0.3, JSON Feed 1.0, and JSON Feed 1.1. Feed bytes are decoded using BOM, HTTP charset, XML declaration, then UTF-8 fallback; unsupported declared encodings fail explicitly instead of persisting mojibake.
+
+Quickadd may inspect a bounded webpage and follow advertised RSS/Atom/JSON Feed links before subscription creation. Feed fetching retains conditional HTTP (`ETag` and `Last-Modified`), bounded redirects, shared SSRF checks, permanent-redirect identity migration after repeated evidence, retry backoff, duplicate Queue-delivery safety, and non-destructive source-window shrinkage.
+
+Feed icons use the same safe-fetch boundary. Discovery priority is Feed metadata, site HTML icon links, then origin `/favicon.ico`. Found icons are cached in D1 for seven days; missing/error results are negatively cached for 24 hours. Icon discovery failure never fails a successful Feed refresh.
 
 A failing feed remains subscribed. Successful later retrieval resets its failure streak.
+
+## Reader item metadata
+
+The effective source title is subscription custom title, then Feed title, then canonical Feed URL. Item responses keep stable field shapes: missing author is `""`, missing article links use empty `alternate`/`canonical` arrays, missing site URL is `origin.htmlUrl: ""`, and `enclosure` is always an array.
+
+Relative article/media URLs in stored HTML are resolved against the article/Feed base URL. Active schemes such as `javascript:` are removed. A content-only publisher edit advances the effective Reader `updated` value without resetting read/starred state.
+
+RSS, Atom, and JSON Feed attachment candidates are persisted as ordered enclosures and exposed to Reeder without a media proxy.
+
+## Public icon endpoint
+
+`GET /feed-icon/:external-id` is read-only and unauthenticated. Known icons return stored bytes with media type, ETag, bounded public cache headers, and `X-Content-Type-Options: nosniff`; matching `If-None-Match` returns 304. Unknown IDs return 404.
 
 ## Admin-only portability and diagnostics
 
@@ -96,21 +112,21 @@ These are not Google Reader endpoints:
 
 OPML preserves active subscription URLs, titles, and representable folder memberships. It intentionally does not back up read/starred state.
 
-## Explicitly unsupported in v0.1
+## Explicitly unsupported in v0.2
 
 - full historical Google Reader API coverage
 - Fever API
 - multi-user accounts
-- webpage-to-feed discovery in `quickadd`
-- JSON Feed unless later required by an actual subscription
 - web reader UI
 - webpage full-text extraction
+- subscription-label removal through `subscription/edit` `r`
+- media proxying or image transformation
 - search, sharing, comments, annotations, or push notifications
 - Reader State backup through OPML
 - force-concurrent refresh of a Feed that already has an unexpired dispatch
 
 ## Real-client release evidence
 
-Automated tests define the intended protocol contract, but v0.1 is not releasable until a real Reeder client completes the release checklist in `docs/release-v0.1.md`.
+Automated tests define the intended protocol contract, but v0.2 is not releasable until a real Reeder client completes the release checklist in `docs/release-v0.2.md`.
 
 For the final compatibility run, temporarily set `REEDER_TRACE=1`. The Worker logs only sanitized request shapes: credentials, Authorization values, feed URLs, item IDs, titles, folder names, timestamps, and continuation tokens are redacted or normalized. Restore `REEDER_TRACE=0` after the capture.
