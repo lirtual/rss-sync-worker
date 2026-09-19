@@ -2,6 +2,7 @@ import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import { discoverFeed } from "./feed/discovery";
 import { FeedFetchError } from "./feed/fetch";
+import { readFeedIcon } from "./feed/icon";
 import {
   deleteFoldersAndReassign,
   findFolderByName,
@@ -236,6 +237,22 @@ const parseMarkAllScope = (stream: string): MarkAllScope | null => {
 
 app.get("/health", (context) => context.json({ status: "ok", service: "rss-sync-worker" }));
 
+app.get("/feed-icon/:externalId", async (context) => {
+  const icon = await readFeedIcon(context.env.DB, context.req.param("externalId"));
+  if (icon === null) return new Response("Not Found", { status: 404 });
+
+  const headers = new Headers({
+    "cache-control": "public, max-age=86400, stale-while-revalidate=604800",
+    "content-type": icon.mediaType,
+    etag: icon.etag,
+    "x-content-type-options": "nosniff",
+  });
+  if (context.req.header("If-None-Match") === icon.etag) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(icon.body, { status: 200, headers });
+});
+
 app.use("/admin/*", requireAdmin);
 app.get("/admin/status", (context) => context.json({ status: "ok" }, 200, jsonHeaders));
 
@@ -351,7 +368,10 @@ app.get(`${readerRoot}/subscription/list`, async (context) => {
         htmlUrl: subscription.siteUrl ?? "",
         title: subscription.title,
         categories: categoriesByFeed.get(subscription.feedId) ?? [],
-        iconUrl: "",
+        iconUrl:
+          subscription.iconExternalId === null
+            ? ""
+            : `${new URL(context.req.url).origin}/feed-icon/${encodeURIComponent(subscription.iconExternalId)}`,
       })),
     },
     200,
