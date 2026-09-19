@@ -37,11 +37,11 @@ const requireAdmin: MiddlewareHandler<AdminBindings> = async (context, next) => 
   if (authorization === undefined || !authorization.startsWith(prefix)) {
     return context.json({ error: "unauthorized" }, 401, noStoreHeaders);
   }
-  // Missing/blank Admin credentials must never authenticate, even with Bearer "".
+  // Reader and Admin share the existing PASSWORD; blank values never authenticate.
   if (
-    !context.env.ADMIN_TOKEN ||
+    !context.env.PASSWORD ||
     !authorization.slice(prefix.length) ||
-    !(await safeEqual(authorization.slice(prefix.length), context.env.ADMIN_TOKEN))
+    !(await safeEqual(authorization.slice(prefix.length), context.env.PASSWORD))
   ) {
     return context.json({ error: "unauthorized" }, 401, noStoreHeaders);
   }

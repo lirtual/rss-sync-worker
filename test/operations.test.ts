@@ -4,7 +4,7 @@ import { cleanupRetainedEntries, RETENTION_AGE_MS, RETENTION_BATCH_LIMIT } from 
 import { dispatchDueFeeds, enqueueFeedRefresh } from "../src/refresh";
 import { ensureSubscription } from "../src/store";
 
-const adminHeaders = { Authorization: "Bearer test-admin-token" };
+const adminHeaders = { Authorization: "Bearer test-reader-token" };
 const dayKey = (value: number): string => new Date(value).toISOString().slice(0, 10);
 
 const insertEntry = async (

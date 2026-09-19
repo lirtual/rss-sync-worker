@@ -77,19 +77,21 @@ describe("free-plan quota and dispatch reliability", () => {
     expect(next?.lastAt).toBe(now + 60_000);
   });
 
-  it("rejects blank and missing admin secret without falling back to reader credentials", async () => {
-    const request = () =>
+  it("authenticates Admin using the shared password and rejects blank values", async () => {
+    const request = (authorization: string) =>
       new Request("https://rss-sync.test/admin/status", {
-        headers: { Authorization: "Bearer " },
+        headers: { Authorization: authorization },
       });
-    const blank: Env = { ...env, DB: env.DB, ADMIN_TOKEN: "" };
+    const blank: Env = { ...env, DB: env.DB, PASSWORD: "" };
     const missing: Env = {
       ...env,
       DB: env.DB,
-      ADMIN_TOKEN: undefined as unknown as string,
+      PASSWORD: undefined as unknown as string,
     };
-    expect((await adminApp.fetch(request(), blank)).status).toBe(401);
-    expect((await adminApp.fetch(request(), missing)).status).toBe(401);
+    expect((await adminApp.fetch(request("Bearer "), blank)).status).toBe(401);
+    expect((await adminApp.fetch(request("Bearer "), missing)).status).toBe(401);
+    expect((await adminApp.fetch(request("Bearer wrong-token"), env)).status).toBe(401);
+    expect((await adminApp.fetch(request("Bearer test-reader-token"), env)).status).toBe(200);
   });
 });
 

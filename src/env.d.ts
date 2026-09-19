@@ -7,11 +7,8 @@ interface RefreshMessage {
 interface Env {
   DB: D1Database;
   REFRESH_QUEUE: Queue<RefreshMessage>;
-  READER_USERNAME: string;
-  READER_TOKEN: string;
-  ADMIN_TOKEN: string;
-  USERNAME?: string;
-  PASSWORD?: string;
+  USERNAME: string;
+  PASSWORD: string;
   DAILY_DISPATCH_BUDGET: string;
   REEDER_TRACE: string;
 }

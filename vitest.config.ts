@@ -11,9 +11,8 @@ export default defineConfig(async () => {
         },
         miniflare: {
           bindings: {
-            READER_USERNAME: "test-reader",
-            READER_TOKEN: "test-reader-token",
-            ADMIN_TOKEN: "test-admin-token",
+            USERNAME: "test-reader",
+            PASSWORD: "test-reader-token",
             DAILY_DISPATCH_BUDGET: "1600",
             REEDER_TRACE: "0",
             TEST_MIGRATIONS: migrations,
