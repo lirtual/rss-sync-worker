@@ -21,6 +21,7 @@ export interface ReaderEntry {
   sourceUpdatedAt: number | null;
   ingestedAt: number;
   updatedAt: number;
+  contentUpdatedAt: number | null;
   contentHtml: string;
   isRead: number;
   isStarred: number;
@@ -97,6 +98,11 @@ export const googleEntry = (entry: ReaderEntry) => {
   for (const folderName of entry.folderNames) categories.push(`user/-/label/${folderName}`);
 
   const publishedAt = entry.publishedAt ?? entry.ingestedAt;
+  const effectiveUpdatedAt = Math.max(
+    entry.sourceUpdatedAt ?? 0,
+    entry.updatedAt,
+    entry.contentUpdatedAt ?? 0,
+  );
   const alternate = entry.url === null ? [] : [{ href: entry.url, type: "text/html" }];
   const canonical = entry.url === null ? [] : [{ href: entry.url }];
 
@@ -106,7 +112,7 @@ export const googleEntry = (entry: ReaderEntry) => {
     timestampUsec: String(entry.ingestedAt * 1_000),
     crawlTimeMsec: String(entry.ingestedAt),
     published: Math.floor(publishedAt / 1_000),
-    updated: Math.floor((entry.sourceUpdatedAt ?? entry.updatedAt) / 1_000),
+    updated: Math.floor(effectiveUpdatedAt / 1_000),
     alternate,
     canonical,
     content: { direction: "ltr", content: entry.contentHtml },
@@ -114,15 +120,13 @@ export const googleEntry = (entry: ReaderEntry) => {
     origin: {
       streamId: `feed/${entry.feedId}`,
       title: entry.feedTitle,
-      ...(entry.feedSiteUrl === null || entry.feedSiteUrl === ""
-        ? {}
-        : { htmlUrl: entry.feedSiteUrl }),
+      htmlUrl: entry.feedSiteUrl ?? "",
     },
     categories,
     enclosure: entry.enclosures.map((item) => ({
       url: item.url,
-      ...(item.mimeType === null || item.mimeType === "" ? {} : { type: item.mimeType }),
+      type: item.mimeType ?? "",
     })),
-    ...(entry.author === null || entry.author === "" ? {} : { author: entry.author }),
+    author: entry.author ?? "",
   };
 };
