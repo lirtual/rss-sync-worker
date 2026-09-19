@@ -251,7 +251,12 @@ app.post("/api/reader/accounts/ClientLogin", async (context) => {
     safeEqual(password, readerToken(context.env)),
   ]);
 
-  if (!readerUsername(context.env) || !readerToken(context.env) || !usernameMatches || !passwordMatches) {
+  if (
+    !readerUsername(context.env) ||
+    !readerToken(context.env) ||
+    !usernameMatches ||
+    !passwordMatches
+  ) {
     return context.json({ error_message: "access unauthorized" }, 401, jsonHeaders);
   }
 
