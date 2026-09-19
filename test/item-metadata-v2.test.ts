@@ -181,6 +181,10 @@ describe("Reader item metadata semantics", () => {
 
     const before = await readerItem(entry.id);
     const beforeUpdated = before.updated as number;
+    const beforeRow = await env.DB.prepare("SELECT updated_at AS updatedAt FROM entries WHERE id = ?")
+      .bind(entry.id)
+      .first<{ updatedAt: number }>();
+    if (beforeRow === null) throw new Error("expected entry metadata");
 
     const second = await claimDispatch(env.DB, feedId, now + 5_000);
     if (second === null) throw new Error("expected second dispatch");
@@ -192,6 +196,11 @@ describe("Reader item metadata semantics", () => {
     );
 
     const after = await readerItem(entry.id);
+    const afterRow = await env.DB.prepare("SELECT updated_at AS updatedAt FROM entries WHERE id = ?")
+      .bind(entry.id)
+      .first<{ updatedAt: number }>();
+    if (afterRow === null) throw new Error("expected updated entry metadata");
+    expect(afterRow.updatedAt).toBeGreaterThan(beforeRow.updatedAt);
     expect(after.updated as number).toBeGreaterThan(beforeUpdated);
     expect((after.content as { content: string }).content).toContain("Second");
     expect(after.categories).toEqual(
