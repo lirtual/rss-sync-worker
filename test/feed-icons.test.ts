@@ -180,6 +180,57 @@ describe("feed icon delivery", () => {
     expect((await subscription(missingId))?.iconUrl).toBe("");
   });
 
+  it("retries expired negative icon cache when the feed returns 304", async () => {
+    const now = 1_870_250_000_000;
+    const feedUrl = "https://icon-304.example/feed.xml";
+    const feedId = await ensureSubscription(env.DB, feedUrl, now);
+    const first = await claimDispatch(env.DB, feedId, now);
+    if (first === null) throw new Error("expected first dispatch");
+
+    let phase: "missing" | "found" = "missing";
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === feedUrl) {
+        const headers = new Headers(init?.headers);
+        if (headers.get("If-None-Match") === '"v1"') {
+          return new Response(null, { status: 304, headers: { etag: '"v1"' } });
+        }
+        return new Response(
+          '<rss version="2.0"><channel><title>304 Icon</title><link>https://icon-304.example/</link></channel></rss>',
+          {
+            status: 200,
+            headers: { "content-type": "application/rss+xml", etag: '"v1"' },
+          },
+        );
+      }
+      if (url === "https://icon-304.example/") {
+        return new Response("<html><head></head></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (url === "https://icon-304.example/favicon.ico") {
+        return phase === "found"
+          ? new Response(png, { status: 200, headers: { "content-type": "image/png" } })
+          : new Response("missing", { status: 404 });
+      }
+      return new Response("missing", { status: 404 });
+    }) as typeof fetch;
+
+    expect(await processRefreshMessage(env, first, now + 1, fetcher)).toBe("processed");
+    expect((await subscription(feedId))?.iconUrl).toBe("");
+
+    phase = "found";
+    const afterNegativeTtl = now + 24 * 60 * 60 * 1000 + 2;
+    const second = await claimDispatch(env.DB, feedId, afterNegativeTtl);
+    if (second === null) throw new Error("expected second dispatch");
+
+    expect(await processRefreshMessage(env, second, afterNegativeTtl + 1, fetcher)).toBe(
+      "not-modified",
+    );
+    expect((await subscription(feedId))?.iconUrl).not.toBe("");
+  });
+
   it("rejects oversized and unsafe icon candidates without failing feed refresh", async () => {
     const now = 1_870_300_000_000;
     const feedUrl = "https://unsafe-icon.example/feed.xml";
