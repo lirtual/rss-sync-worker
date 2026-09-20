@@ -1,5 +1,5 @@
 import { env, exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { processRefreshMessage } from "../src/refresh";
 import { claimDispatch, ensureSubscription } from "../src/store";
 
@@ -29,8 +29,21 @@ const fakeFeed = (body: string) => async (): Promise<Response> =>
     headers: { "content-type": "application/rss+xml", etag: '"v1"' },
   });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("subscription bootstrap", () => {
   it("quickadd is idempotent and appears in subscription/list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          `<rss version="2.0"><channel><title>https://example.net/feed.xml</title><link>https://example.net/</link></channel></rss>`,
+          { status: 200, headers: { "content-type": "application/rss+xml" } },
+        ),
+    );
+
     const request = () =>
       exports.default.fetch(
         new Request("https://rss-sync.test/api/reader/reader/api/0/subscription/quickadd", {

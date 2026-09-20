@@ -9,7 +9,7 @@ export const markStreamRead = async (
   cutoffMs: number,
   changedAt: number,
 ): Promise<number> => {
-  const conditions = ["s.active = 1", "COALESCE(e.published_at, e.ingested_at) <= ?"];
+  const conditions = ["s.active = 1", "e.ingested_at <= ?"];
   const bindings: Array<string | number> = [cutoffMs];
   let folderJoin = "";
 

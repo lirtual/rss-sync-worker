@@ -1,5 +1,5 @@
 import { env, exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureSubscription } from "../src/store";
 
 const root = "https://rss-sync.test/api/reader/reader/api/0";
@@ -16,9 +16,22 @@ const post = (path: string, values: Array<[string, string]>) =>
     }),
   );
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("Reeder subscription wire compatibility", () => {
-  it("returns the complete quickadd response without fetching synchronously", async () => {
+  it("validates direct feeds before creating the quickadd subscription", async () => {
     const url = "https://quick-shape.example/feed.xml";
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(
+          `<rss version="2.0"><channel><title>Quick Feed</title><link>https://quick-shape.example/</link></channel></rss>`,
+          { status: 200, headers: { "content-type": "application/rss+xml" } },
+        ),
+    );
+
     const response = await post("subscription/quickadd", [["quickadd", url]]);
     expect(response.status).toBe(200);
 
@@ -31,7 +44,7 @@ describe("Reeder subscription wire compatibility", () => {
     expect(body).toMatchObject({
       numResults: 1,
       query: url,
-      streamName: url,
+      streamName: "Quick Feed",
     });
     expect(body.streamId).toMatch(/^feed\/\d+$/u);
 
@@ -43,6 +56,27 @@ describe("Reeder subscription wire compatibility", () => {
       .first<{ lastAttemptAt: number | null; dispatchToken: string | null }>();
     expect(feed?.lastAttemptAt).toBeNull();
     expect(feed?.dispatchToken).toBeTypeOf("string");
+  });
+
+  it("returns no result and creates no subscription when discovery finds no feed", async () => {
+    const url = "https://no-feed.example/";
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response("<html><head><title>No feed</title></head><body>none</body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+    );
+
+    const response = await post("subscription/quickadd", [["quickadd", url]]);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ numResults: 0, query: url });
+
+    const row = await env.DB.prepare("SELECT id FROM feeds WHERE canonical_feed_url = ?")
+      .bind(url)
+      .first<{ id: number }>();
+    expect(row).toBeNull();
   });
 
   it("subscribes URL-form streams and reuses canonical alias identity", async () => {

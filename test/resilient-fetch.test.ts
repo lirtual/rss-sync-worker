@@ -58,6 +58,23 @@ describe("safe feed retrieval", () => {
     expect(seen.get("If-Modified-Since")).toBe("Wed, 16 Sep 2026 12:00:00 GMT");
   });
 
+  it("preserves response bytes and content type for downstream decoding", async () => {
+    const bytes = new Uint8Array([0xff, 0xfe, 0x41, 0x00]);
+    const result = await fetchFeedDocument(
+      "https://bytes.example/feed.xml",
+      { etag: null, lastModified: null },
+      async () =>
+        new Response(bytes, {
+          status: 200,
+          headers: { "content-type": "application/xml; charset=utf-16le" },
+        }),
+    );
+
+    expect(result.status).toBe("fetched");
+    expect(result.body).toEqual(bytes);
+    expect(result.contentType).toBe("application/xml; charset=utf-16le");
+  });
+
   it("rejects redirects into private targets", async () => {
     await expect(
       fetchFeedDocument(

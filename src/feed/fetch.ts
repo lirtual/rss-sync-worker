@@ -14,7 +14,8 @@ export class FeedFetchError extends Error {
 
 export interface FeedFetchResult {
   status: "not-modified" | "fetched";
-  body: string | null;
+  body: Uint8Array | null;
+  contentType: string | null;
   finalUrl: string;
   permanentRedirectTarget: string | null;
   etag: string | null;
@@ -96,31 +97,93 @@ export const assertSafeFeedUrl = (input: string | URL): URL => {
   return url;
 };
 
-const readBodyLimited = async (response: Response): Promise<string> => {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength !== null && Number(contentLength) > MAX_BODY_BYTES) {
+const isHtmlContentType = (contentType: string | null): boolean => {
+  const mediaType = contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return mediaType === "text/html" || mediaType === "application/xhtml+xml";
+};
+
+const looksLikeHtml = (bytes: Uint8Array): boolean => {
+  const sample = new TextDecoder("utf-8", { fatal: false, ignoreBOM: false })
+    .decode(bytes.subarray(0, Math.min(bytes.byteLength, 512)))
+    .trimStart()
+    .toLowerCase();
+  return sample.startsWith("<!doctype html") || sample.startsWith("<html");
+};
+
+const readBodyLimited = async (
+  response: Response,
+  maxBodyBytes: number,
+  maxHtmlBodyBytes: number | null,
+): Promise<Uint8Array> => {
+  const contentLengthHeader = response.headers.get("content-length");
+  const contentLength = contentLengthHeader === null ? null : Number(contentLengthHeader);
+  let effectiveLimit =
+    maxHtmlBodyBytes !== null && isHtmlContentType(response.headers.get("content-type"))
+      ? Math.min(maxBodyBytes, maxHtmlBodyBytes)
+      : maxBodyBytes;
+
+  if (contentLength !== null && Number.isFinite(contentLength) && contentLength > effectiveLimit) {
     await response.body?.cancel();
-    throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
+    throw new FeedFetchError("response_too_large", "feed response exceeds configured size limit");
   }
-  if (response.body === null) return "";
+  if (response.body === null) return new Uint8Array();
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let total = 0;
-  const chunks: string[] = [];
+  let sniff = new Uint8Array();
+  let sniffComplete =
+    maxHtmlBodyBytes === null || isHtmlContentType(response.headers.get("content-type"));
+  const chunks: Uint8Array[] = [];
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      total += value.byteLength;
-      if (total > MAX_BODY_BYTES) {
-        await reader.cancel();
-        throw new FeedFetchError("response_too_large", "feed response exceeds 8 MiB limit");
+
+      if (!sniffComplete) {
+        const remaining = 512 - sniff.byteLength;
+        if (remaining > 0) {
+          const portion = value.subarray(0, Math.min(value.byteLength, remaining));
+          const next = new Uint8Array(sniff.byteLength + portion.byteLength);
+          next.set(sniff);
+          next.set(portion, sniff.byteLength);
+          sniff = next;
+        }
+        if (looksLikeHtml(sniff)) {
+          effectiveLimit = Math.min(maxBodyBytes, maxHtmlBodyBytes ?? maxBodyBytes);
+          sniffComplete = true;
+          if (
+            contentLength !== null &&
+            Number.isFinite(contentLength) &&
+            contentLength > effectiveLimit
+          ) {
+            await reader.cancel();
+            throw new FeedFetchError(
+              "response_too_large",
+              "feed response exceeds configured size limit",
+            );
+          }
+        } else if (sniff.byteLength >= 512) {
+          sniffComplete = true;
+        }
       }
-      chunks.push(decoder.decode(value, { stream: true }));
+
+      total += value.byteLength;
+      if (total > effectiveLimit) {
+        await reader.cancel();
+        throw new FeedFetchError(
+          "response_too_large",
+          "feed response exceeds configured size limit",
+        );
+      }
+      chunks.push(value);
     }
-    chunks.push(decoder.decode());
-    return chunks.join("");
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return body;
   } finally {
     reader.releaseLock();
   }
@@ -145,19 +208,29 @@ const fetchWithTimeout = async (
   }
 };
 
+export interface FeedFetchOptions {
+  maxBodyBytes?: number;
+  maxHtmlBodyBytes?: number;
+  accept?: string;
+}
+
 export const fetchFeedDocument = async (
   input: string,
   conditional: { etag: string | null; lastModified: string | null },
   fetcher: typeof fetch = fetch,
+  options: FeedFetchOptions = {},
 ): Promise<FeedFetchResult> => {
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
+  const accept =
+    options.accept ??
+    "application/atom+xml, application/rss+xml, application/feed+json, application/json, application/xml, text/xml;q=0.9, */*;q=0.1";
   let current = assertSafeFeedUrl(input);
   let permanentOnly = true;
   let followedPermanentRedirect = false;
 
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     const headers = new Headers({
-      Accept:
-        "application/atom+xml, application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+      Accept: accept,
       "User-Agent": "rss-sync-worker/0.1",
     });
     if (conditional.etag !== null) headers.set("If-None-Match", conditional.etag);
@@ -191,6 +264,7 @@ export const fetchFeedDocument = async (
             : null,
         etag: response.headers.get("etag") ?? conditional.etag,
         lastModified: response.headers.get("last-modified") ?? conditional.lastModified,
+        contentType: response.headers.get("content-type"),
       };
     }
 
@@ -201,7 +275,7 @@ export const fetchFeedDocument = async (
 
     return {
       status: "fetched",
-      body: await readBodyLimited(response),
+      body: await readBodyLimited(response, maxBodyBytes, options.maxHtmlBodyBytes ?? null),
       finalUrl: current.toString(),
       permanentRedirectTarget:
         followedPermanentRedirect && permanentOnly && current.toString() !== input
@@ -209,6 +283,7 @@ export const fetchFeedDocument = async (
           : null,
       etag: response.headers.get("etag"),
       lastModified: response.headers.get("last-modified"),
+      contentType: response.headers.get("content-type"),
     };
   }
 
